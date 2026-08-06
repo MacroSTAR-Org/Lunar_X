@@ -26,6 +26,8 @@ import re
 
 import aiohttp
 
+from core.events import MessageEvent
+
 _session = None
 _histories = {}
 
@@ -151,6 +153,10 @@ async def _ask_ai(bot, cfg, event, question):
 
 
 async def on_message(event, bot):
+    # Any 触发会收到所有事件（含通知/请求类），非消息事件直接跳过
+    if not isinstance(event, MessageEvent):
+        return False
+
     cfg = _cfg(bot)
     if not cfg.get('enabled', False):
         return False
