@@ -104,7 +104,9 @@ class LunarBot:
             self.message_count['received'] += 1
         
         trigger_keyword = self.config.get('trigger_keyword', '/')
-        message_text = event.get_text()
+        # 命令判定仅基于文本段拼接：忽略 reply/at/图片等非文本段，
+        # 否则引用（回复）消息开头的 "[回复]" 占位符会让 "$xxx" 判定失败
+        message_text = ''.join(seg.text for seg in event.message if isinstance(seg, TextSegment))
         
         logger.debug(f"处理消息事件: 原始消息='{message_text}', 触发词='{trigger_keyword}'")
 
