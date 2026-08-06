@@ -108,6 +108,28 @@ def fmt_ts(ts):
     return datetime.fromtimestamp(ts).strftime('%m-%d %H:%M')
 
 
+async def _extract_reply_content(bot, event):
+    """从消息的 reply 段获取被引用消息的文本内容（通过 Milky get_message API）"""
+    for seg in getattr(event, 'message', []) or []:
+        if seg.type == 'reply':
+            reply_id = seg.data.get('id')
+            group_id = getattr(event, 'group_id', None)
+            if not reply_id or not group_id:
+                return None
+            try:
+                result = await bot.diy.get_message(
+                    message_scene='group', peer_id=group_id, message_seq=int(reply_id))
+                if result and result.get('status') == 'ok':
+                    msg = result.get('data', {}).get('message', {})
+                    segs = msg.get('segments', []) if isinstance(msg, dict) else []
+                    text = ''.join(s.get('data', {}).get('text', '')
+                                   for s in segs if s.get('type') == 'text')
+                    return text.strip() or None
+            except Exception:
+                pass
+    return None
+
+
 async def on_message(event, bot):
     if not event.is_command:
         return False
@@ -123,13 +145,19 @@ async def on_message(event, bot):
     # ---------- 收录 ----------
     if cmd == '收录':
         if not args:
-            await bot.send('用法: $收录 [分类] <内容>\n示例: $收录 沙雕 今天又帅了', group_id=group_id)
-            return True
-        parts = args.split(' ', 1)
-        if len(parts) == 2 and len(parts[0]) <= 6:
-            category, content = parts[0].strip(), parts[1].strip()
+            # 引用模式：引用一条消息后发 $收录，收录被引用内容
+            content = await _extract_reply_content(bot, event)
+            if not content:
+                await bot.send('用法: $收录 [分类] <内容>；或引用（回复）一条消息后发 $收录，收录被引用的内容',
+                               group_id=group_id)
+                return True
+            category = ''
         else:
-            category, content = '', args.strip()
+            parts = args.split(' ', 1)
+            if len(parts) == 2 and len(parts[0]) <= 6:
+                category, content = parts[0].strip(), parts[1].strip()
+            else:
+                category, content = '', args.strip()
         if len(content) > 200:
             await bot.send('语录内容太长了（最多 200 字）', group_id=group_id)
             return True

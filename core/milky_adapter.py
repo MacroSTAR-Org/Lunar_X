@@ -12,7 +12,7 @@ from .logger import logger
 SAME_NAME_ACTIONS = {
     'get_login_info', 'get_friend_list', 'get_friend_info', 'get_user_profile',
     'get_group_list', 'get_group_info', 'get_group_member_info', 'get_group_member_list',
-    'get_cookies', 'get_csrf_token', 'get_friend_requests',
+    'get_message', 'get_cookies', 'get_csrf_token', 'get_friend_requests',
     'accept_friend_request', 'reject_friend_request', 'delete_friend',
     'send_friend_nudge', 'send_group_nudge', 'send_profile_like',
     'send_group_announcement', 'get_group_announcements', 'delete_group_announcement',
