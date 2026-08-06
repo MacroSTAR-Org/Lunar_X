@@ -1,12 +1,16 @@
 import os
 import json
+import hashlib
+import secrets
+import time
 import requests
 import subprocess
 import shutil
 import zipfile
 import logging
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify, stream_with_context, Response
+from functools import wraps
+from flask import Flask, render_template, request, jsonify, stream_with_context, Response, session, redirect, url_for
 from flask.logging import default_handler
 import sys
 import re
@@ -22,6 +26,64 @@ APPSETTINGS_PATH = os.path.abspath('appsettings.json')
 CONFIG_JSON_PATH = os.path.abspath('config.json')
 ADMIN_JSON_PATH = os.path.abspath('admin114.json')
 WEBUI_JSON_PATH = os.path.abspath('webui.json')
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs', 'lunarx.log')
+
+
+def load_webui_config():
+    try:
+        with open(WEBUI_JSON_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_webui_config(config):
+    with open(WEBUI_JSON_PATH, 'w', encoding='utf-8') as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+
+
+def get_session_secret():
+    """会话密钥：从 webui.json 读取，不存在则生成并持久化（重启不失效）"""
+    config = load_webui_config()
+    secret = config.get('session_secret')
+    if not secret:
+        secret = secrets.token_hex(32)
+        config['session_secret'] = secret
+        save_webui_config(config)
+    return secret
+
+
+app.secret_key = get_session_secret()
+
+
+# ---------- 登录鉴权 ----------
+
+def hash_password(password: str, salt: str = None) -> str:
+    """PBKDF2-SHA256 密码哈希（标准库实现，无需额外依赖）"""
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'),
+                                 bytes.fromhex(salt), 100_000).hex()
+    return f"pbkdf2${salt}${digest}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        _, salt, _ = stored.split('$')
+        return hash_password(password, salt) == stored
+    except Exception:
+        return False
+
+
+@app.before_request
+def require_login():
+    """除登录页/登录接口外，所有页面与 API 均需登录"""
+    if request.path == '/login' or request.path == '/api/login' or request.path == '/api/auth_status':
+        return None
+    if session.get('logged_in'):
+        return None
+    if request.path.startswith('/api/'):
+        return jsonify({'error': '未登录'}), 401
+    return redirect(url_for('login_page'))
 
 class CustomFormatter(logging.Formatter):
     def format(self, record):
@@ -114,7 +176,10 @@ def init_default_configs():
             "pypi_mirror": "https://pypi.tuna.tsinghua.edu.cn/simple",
             "github_mirror": "",
             "github_pat": "",
-            "plugins_index_repo": "IntelliMarkets/Jianer_Plugins_Index"
+            "plugins_index_repo": "IntelliMarkets/Jianer_Plugins_Index",
+            "username": "lunarx",
+            "password_hash": hash_password("lunarx"),
+            "session_secret": secrets.token_hex(32)
         }
         with open(WEBUI_JSON_PATH, 'w', encoding='utf-8') as f:
             json.dump(default_webui, f, indent=2, ensure_ascii=False)
@@ -128,6 +193,13 @@ def init_default_configs():
             if "plugins_index_repo" not in webui_config:
                 webui_config["plugins_index_repo"] = "IntelliMarkets/Jianer_Plugins_Index"
                 updated = True
+            if "username" not in webui_config:
+                webui_config["username"] = "lunarx"
+                webui_config["password_hash"] = hash_password("lunarx")
+                updated = True
+            if "session_secret" not in webui_config:
+                webui_config["session_secret"] = secrets.token_hex(32)
+                updated = True
             if updated:
                 f.seek(0)
                 json.dump(webui_config, f, indent=2, ensure_ascii=False)
@@ -138,6 +210,107 @@ init_default_configs()
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/login', endpoint='login_page')
+def login_page():
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+    return render_template('login.html')
+
+@app.route('/api/auth_status', methods=['GET'])
+def auth_status():
+    config = load_webui_config()
+    return jsonify({
+        'logged_in': bool(session.get('logged_in')),
+        'username': session.get('username') or config.get('username', 'lunarx')
+    })
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    data = request.get_json() or {}
+    username = data.get('username', '')
+    password = data.get('password', '')
+
+    config = load_webui_config()
+    stored_username = config.get('username', 'lunarx')
+    stored_hash = config.get('password_hash', '')
+
+    if username == stored_username and verify_password(password, stored_hash):
+        session['logged_in'] = True
+        session['username'] = username
+        app.logger.info(f"WebUI 登录成功: {username}")
+        return jsonify({'message': '登录成功', 'username': username})
+    app.logger.warning(f"WebUI 登录失败: {username}")
+    return jsonify({'error': '用户名或密码错误'}), 401
+
+@app.route('/api/logout', methods=['POST'])
+def logout():
+    session.clear()
+    return jsonify({'message': '已退出登录'})
+
+@app.route('/api/logs', methods=['GET'])
+def get_logs():
+    """获取框架日志历史（最后 N 行）"""
+    tail = request.args.get('tail', 200, type=int)
+    tail = max(1, min(tail, 5000))
+    try:
+        with open(LOG_FILE, 'r', encoding='utf-8', errors='replace') as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        return jsonify({'lines': [], 'exists': False})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify({'lines': lines[-tail:], 'exists': True})
+
+@app.route('/api/logs/stream')
+def stream_logs():
+    """SSE 实时推送框架日志新行"""
+    def generate():
+        last_size = 0
+        try:
+            last_size = os.path.getsize(LOG_FILE)
+        except OSError:
+            pass
+        heartbeat = 0
+        while True:
+            try:
+                size = os.path.getsize(LOG_FILE)
+                if size < last_size:
+                    # 日志文件轮转，从头开始读
+                    last_size = 0
+                if size > last_size:
+                    with open(LOG_FILE, 'r', encoding='utf-8', errors='replace') as f:
+                        f.seek(last_size)
+                        new_data = f.read()
+                    last_size = size
+                    for line in new_data.splitlines():
+                        yield f"data: {line}\n\n"
+            except Exception:
+                pass
+            heartbeat += 1
+            if heartbeat % 15 == 0:
+                yield ": ping\n\n"
+            time.sleep(1)
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+@app.route('/api/change_password', methods=['POST'])
+def change_password():
+    data = request.get_json() or {}
+    old_password = data.get('old_password', '')
+    new_password = data.get('new_password', '')
+
+    config = load_webui_config()
+    stored_hash = config.get('password_hash', '')
+
+    if not verify_password(old_password, stored_hash):
+        return jsonify({'error': '旧密码错误'}), 401
+    if len(new_password) < 4:
+        return jsonify({'error': '新密码长度至少 4 位'}), 400
+
+    config['password_hash'] = hash_password(new_password)
+    save_webui_config(config)
+    app.logger.info("WebUI 密码已修改")
+    return jsonify({'message': '密码修改成功'})
 
 @app.route('/api/config/<config_type>', methods=['GET'])
 def get_config(config_type):

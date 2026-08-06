@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 · Lunar X 控制面板</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: #1b1c22;
+            color: #e8e8ea;
+        }
+
+        .login-card {
+            width: 380px;
+            padding: 36px 36px 30px;
+            background: #23242c;
+            border: 1px solid #35363f;
+            border-radius: 12px;
+        }
+
+        .logo {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+        .logo h1 {
+            font-size: 21px;
+            font-weight: 600;
+            color: #f0f0f2;
+        }
+        .logo p {
+            margin-top: 6px;
+            font-size: 12.5px;
+            color: #8a8b93;
+        }
+
+        .field { margin-bottom: 18px; }
+        .field label {
+            display: block;
+            font-size: 13px;
+            color: #a0a1a8;
+            margin-bottom: 7px;
+        }
+        .field input {
+            width: 100%;
+            padding: 11px 13px;
+            font-size: 14px;
+            color: #e8e8ea;
+            background: #1b1c22;
+            border: 1px solid #3a3b44;
+            border-radius: 8px;
+            outline: none;
+        }
+        .field input:focus {
+            border-color: #4a6cf7;
+        }
+        .field input::placeholder { color: #5c5d66; }
+
+        .btn {
+            width: 100%;
+            padding: 12px;
+            margin-top: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            color: #fff;
+            background: #3d5af1;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        .btn:hover { background: #4a66f5; }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .hint {
+            margin-top: 18px;
+            text-align: center;
+            font-size: 12px;
+            color: #8a8b93;
+        }
+        .hint code {
+            padding: 2px 7px;
+            background: #2d2e37;
+            border-radius: 5px;
+            color: #a8b4f0;
+        }
+
+        .error-msg {
+            margin-top: 14px;
+            padding: 9px 13px;
+            font-size: 13px;
+            color: #ff8b93;
+            background: #3a2326;
+            border: 1px solid #5a3036;
+            border-radius: 8px;
+            display: none;
+        }
+        .error-msg.show { display: block; }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="logo">
+            <h1>Lunar X 控制面板</h1>
+            <p>新一代 QQ 机器人框架</p>
+        </div>
+
+        <div class="field">
+            <label>用户名</label>
+            <input type="text" id="username" placeholder="用户名" autocomplete="username" autofocus>
+        </div>
+        <div class="field">
+            <label>密码</label>
+            <input type="password" id="password" placeholder="密码" autocomplete="current-password">
+        </div>
+
+        <button class="btn" id="loginBtn" onclick="doLogin()">登 录</button>
+
+        <div class="error-msg" id="errorMsg"></div>
+
+        <div class="hint">默认账号 <code>lunarx</code> · 默认密码 <code>lunarx</code></div>
+    </div>
+
+    <script>
+        async function doLogin() {
+            const btn = document.getElementById('loginBtn');
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            const errEl = document.getElementById('errorMsg');
+            errEl.classList.remove('show');
+
+            if (!username || !password) {
+                showError('请输入用户名和密码');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = '登录中...';
+            try {
+                const resp = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    location.href = '/';
+                } else {
+                    showError(data.error || '登录失败');
+                    btn.disabled = false;
+                    btn.textContent = '登 录';
+                }
+            } catch (e) {
+                showError('网络错误: ' + e.message);
+                btn.disabled = false;
+                btn.textContent = '登 录';
+            }
+        }
+
+        function showError(msg) {
+            const el = document.getElementById('errorMsg');
+            el.textContent = msg;
+            el.classList.add('show');
+        }
+
+        document.getElementById('password').addEventListener('keydown', e => {
+            if (e.key === 'Enter') doLogin();
+        });
+    </script>
+</body>
+</html>
