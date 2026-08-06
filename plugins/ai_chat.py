@@ -14,7 +14,8 @@
 #   allow_users:    允许使用的用户 QQ 列表（空 = 全部）
 #   allow_groups:   允许使用的群号列表（空 = 全部）
 #   persona:        人格设置（WebUI「人格设置」页）
-#     nickname:       昵称，群聊以该昵称开头即触发对话
+#     enabled:        是否使用名字唤醒（群聊中以唤醒词开头即触发对话）
+#     nicknames:      唤醒词列表（支持多个，如 ["小月", "月月"]）
 #     system_prompt:  人格提示词（优先于 ai.system_prompt）
 TRIGGHT_KEYWORD = 'Any'
 PLT_ST = 1
@@ -89,8 +90,14 @@ def _persona(cfg):
     return cfg.get('persona', {}) or {}
 
 
-def _persona_nickname(cfg):
-    return (_persona(cfg).get('nickname') or '').strip()
+def _persona_nicknames(cfg):
+    """人格唤醒词列表（支持多个，兼容旧的 nickname 单值字段）"""
+    p = _persona(cfg)
+    nicks = p.get('nicknames')
+    if isinstance(nicks, list):
+        return [n.strip() for n in nicks if n and n.strip()]
+    n = (p.get('nickname') or '').strip()
+    return [n] if n else []
 
 
 async def _ask_ai(bot, cfg, event, question):
@@ -153,14 +160,21 @@ async def on_message(event, bot):
     group_id = getattr(event, 'group_id', None)
     is_command = bool(event.is_command and event.command == 'ai')
     direct = cfg.get('direct_chat', False) and (not group_id or _is_mentioning_bot(event))
-    # 昵称触发：群聊消息以人格昵称开头（如 "小月 今天天气"）
-    nickname = _persona_nickname(cfg)
-    nickname_hit = bool(nickname and group_id and event.get_text().startswith(nickname))
+    # 名字唤醒：群聊消息以任一唤醒词开头（如 "小月 今天天气"）
+    nicknames = _persona_nicknames(cfg)
+    matched_nick = ''
+    if nicknames and group_id:
+        text = event.get_text()
+        # 按长度降序匹配，避免短词误匹配长词前缀
+        for nick in sorted(nicknames, key=len, reverse=True):
+            if text.startswith(nick):
+                matched_nick = nick
+                break
 
-    if not (is_command or direct or nickname_hit):
+    if not (is_command or direct or matched_nick):
         return False
 
-    question = _extract_question(event, getattr(event, 'args', ''), cfg, nickname)
+    question = _extract_question(event, getattr(event, 'args', ''), cfg, matched_nick)
     if not question:
         await bot.send('用法: $ai <问题>',
                        group_id=group_id,
