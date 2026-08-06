@@ -19,6 +19,8 @@ import psutil
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['PLUGINS_DIR'] = 'plugins'
+app.config['TEMPLATES_AUTO_RELOAD'] = True
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['PLUGINS_DIR'], exist_ok=True)
@@ -73,6 +75,16 @@ def verify_password(password: str, stored: str) -> bool:
         return hash_password(password, salt) == stored
     except Exception:
         return False
+
+
+@app.after_request
+def add_no_cache(response):
+    """页面/API 不缓存，避免浏览器加载旧版 HTML/JS"""
+    if request.path.startswith('/api/logs/stream'):
+        return response
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    return response
 
 
 @app.before_request
@@ -342,6 +354,74 @@ def _check_qq_online():
         return {'online': False, 'detail': '协议端未启动或无法连接'}
     except Exception as e:
         return {'online': False, 'detail': str(e)}
+
+
+def get_framework_version():
+    """从 core/bot.py 注释读取框架版本号"""
+    try:
+        bot_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'core', 'bot.py')
+        with open(bot_py, 'r', encoding='utf-8') as f:
+            for line in f:
+                if '版本' in line:
+                    m = re.search(r'BETA\s+([\d.]+)', line)
+                    if m:
+                        return m.group(1)
+    except Exception:
+        pass
+    return '0.1.0.122'
+
+
+def _find_bot_processes():
+    """查找所有 Lunar X 主进程（含 venv 启动器与真解释器）"""
+    result = []
+    try:
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                cmdline = proc.info.get('cmdline') or []
+                if any('main.py' in c for c in cmdline):
+                    result.append(proc)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except Exception:
+        pass
+    return result
+
+
+@app.route('/api/version', methods=['GET'])
+def get_version():
+    return jsonify({'version': get_framework_version()})
+
+@app.route('/api/restart_bot', methods=['POST'])
+def restart_bot():
+    """重启 Lunar X 机器人进程（先杀后启）"""
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        main_py = os.path.join(base_dir, 'main.py')
+
+        # 1. 终止现有 bot 进程（启动器 + 真解释器）
+        killed = []
+        for proc in _find_bot_processes():
+            try:
+                proc.kill()
+                killed.append(proc.pid)
+            except Exception as e:
+                app.logger.warning(f"终止 bot 进程 {proc.pid} 失败: {e}")
+        time.sleep(1.5)
+
+        # 2. 重新启动（独立进程，脱离 WebUI）
+        flags = getattr(subprocess, 'DETACHED_PROCESS', 0) | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+        subprocess.Popen(
+            [sys.executable, main_py],
+            cwd=base_dir,
+            creationflags=flags,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        app.logger.info(f"机器人重启完成（旧进程: {killed or '无'}，已启动新进程）")
+        return jsonify({'message': '机器人重启中，请稍候约 5 秒', 'killed': killed})
+    except Exception as e:
+        app.logger.error(f"重启机器人失败: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/dashboard', methods=['GET'])
@@ -966,5 +1046,5 @@ def install_plugin():
     return Response(stream_with_context(generate_install_logs()), mimetype='text/event-stream')
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=False, threaded=True, host='0.0.0.0', port=5000)
 
