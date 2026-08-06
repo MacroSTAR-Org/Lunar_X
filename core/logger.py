@@ -1,6 +1,11 @@
 import logging
+import os
 import sys
+from logging.handlers import RotatingFileHandler
 from typing import Dict, Any, List, Optional
+
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'logs')
+LOG_FILE = os.path.join(LOG_DIR, 'lunarx.log')
 
 def title() -> str:
     return r'''# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -70,10 +75,53 @@ class EmojiFormatter(logging.Formatter):
         formatted_message = super().format(record)
         return formatted_message
 
+class PlainFileFormatter(logging.Formatter):
+    """文件日志格式：无 ANSI 颜色码，含 emoji 与日志来源"""
+    def format(self, record):
+        record.emoji_prefix = self._log_level_emojis.get(record.levelno, "")
+        if record.name == 'LunarBot':
+            record.logger_display = ''
+        elif record.name == 'LunarPlugins':
+            record.logger_display = '[Lunar Plugins System]'
+        elif record.name.startswith('Plugins:'):
+            record.logger_display = f'[Lunar Plugins System] [{record.name}]'
+        else:
+            record.logger_display = f'[{record.name}]'
+        return super().format(record)
+
+    _log_level_emojis = {
+        logging.DEBUG: "🐛",
+        logging.INFO: "ℹ️",
+        logging.WARNING: "⚠️",
+        logging.ERROR: "❌",
+        logging.CRITICAL: "🚨",
+        SUCCESS_LEVEL: "✅",
+    }
+
 class LunarLogger:
     def __init__(self):
         self._loggers = {}
+        self._setup_file_handler()
         self._setup_default_loggers()
+
+    def _setup_file_handler(self):
+        """所有 logger 共用的文件输出（供 WebUI 控制台读取）"""
+        try:
+            os.makedirs(LOG_DIR, exist_ok=True)
+            self._file_handler = RotatingFileHandler(
+                LOG_FILE, maxBytes=2 * 1024 * 1024, backupCount=3,
+                encoding='utf-8')
+            self._file_handler.setFormatter(PlainFileFormatter(
+                '[%(asctime)s.%(msecs)03d] %(logger_display)s %(emoji_prefix)s %(levelname)s %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'))
+            self._file_handler.setLevel(logging.DEBUG)
+        except Exception as e:
+            print(f"[logger] 文件日志初始化失败: {e}")
+            self._file_handler = None
+
+    def _attach_file_handler(self, logger: logging.Logger):
+        if self._file_handler and self._file_handler not in logger.handlers:
+            logger.addHandler(self._file_handler)
     
     def _setup_default_loggers(self):
         self._setup_logger(
@@ -104,6 +152,7 @@ class LunarLogger:
         ))
         
         logger.addHandler(handler)
+        self._attach_file_handler(logger)
         logger.propagate = False
         
         self._loggers[name] = logger
@@ -118,6 +167,7 @@ class LunarLogger:
         if name not in self._loggers:
             default_format = '[%(asctime)s.%(msecs)03d] %(logger_display)s %(emoji_prefix)s %(colored_levelname)s %(message)s'
             self._setup_logger(name, default_format, 'INFO')
+            self._attach_file_handler(self._loggers[name])
         
         return self._loggers[name]
     
