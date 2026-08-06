@@ -8,6 +8,7 @@ venv/
 # 运行时数据
 logs/
 uploads/
+data/
 restart_info.json
 
 # 本地配置（含密钥，勿提交）
