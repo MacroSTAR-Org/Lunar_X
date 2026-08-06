@@ -1,7 +1,10 @@
 {
   "github_mirror": "https://bing.undreamwork.top/",
   "github_pat": "",
-  "plugins_index_repo": "IntelliMarkets/Jianer_Plugins_Index",
+  "plugins_index_repo": "MacroSTAR-Org/Unisphere",
   "pypi_mirror": "https://pypi.tuna.tsinghua.edu.cn/simple",
-  "use_pypi_mirror": true
+  "use_pypi_mirror": true,
+  "session_secret": "4b04b3553bbf2ef0a8af099b35816f8ad8696d933be2cdfd0ab362966f75e083",
+  "username": "lunarx",
+  "password_hash": "pbkdf2$5fc4da98787469362f6e28e905c8ce78$f0447fe9a8149ff9b090ac55b3d08b052c8643175a95181b476e87a368e52469"
 }

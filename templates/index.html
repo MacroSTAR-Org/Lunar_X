@@ -633,8 +633,8 @@
  <small style="color: rgba(255,255,255,0.7);">在GitHub设置中生成，需要repo权限。不填可能遇到API速率限制。</small>
  </div>
  <div class="form-group">
- <label for="pluginsIndexRepo">插件索引仓库 (例如: IntelliMarkets/Jianer_Plugins_Index)</label>
- <input type="text" id="pluginsIndexRepo" placeholder="Example: IntelliMarkets/Jianer_Plugins_Index">
+ <label for="pluginsIndexRepo">插件索引仓库 (例如: MacroSTAR-Org/Unisphere)</label>
+ <input type="text" id="pluginsIndexRepo" placeholder="Example: MacroSTAR-Org/Unisphere">
  <small style="color: rgba(255,255,255,0.7);">格式为 `所有者/仓库名`。</small>
  </div>
  <button onclick="saveWebuiConfig()">保存设置</button>
@@ -883,9 +883,9 @@
                 document.getElementById('pypiMirror').value = webuiData.pypi_mirror || '';
                 document.getElementById('githubMirror').value = webuiData.github_mirror || '';
                 document.getElementById('githubPat').value = webuiData.github_pat || '';
-                document.getElementById('pluginsIndexRepo').value = webuiData.plugins_index_repo || 'IntelliMarkets/Jianer_Plugins_Index';
+                document.getElementById('pluginsIndexRepo').value = webuiData.plugins_index_repo || 'MacroSTAR-Org/Unisphere';
                 
-                pluginsIndexRepoNameOnly = (webuiData.plugins_index_repo || 'IntelliMarkets/Jianer_Plugins_Index').split('/').pop();
+                pluginsIndexRepoNameOnly = (webuiData.plugins_index_repo || 'MacroSTAR-Org/Unisphere').split('/').pop();
 
                 loadInstalledPlugins();
                 loadAvailablePlugins();
@@ -1030,7 +1030,7 @@
                 webuiData.github_pat = document.getElementById('githubPat').value;
                 webuiData.plugins_index_repo = document.getElementById('pluginsIndexRepo').value;
                 
-                pluginsIndexRepoNameOnly = (webuiData.plugins_index_repo || 'IntelliMarkets/Jianer_Plugins_Index').split('/').pop();
+                pluginsIndexRepoNameOnly = (webuiData.plugins_index_repo || 'MacroSTAR-Org/Unisphere').split('/').pop();
 
                 const saveRes = await fetch('/api/config/webui', {
                     method: 'POST',

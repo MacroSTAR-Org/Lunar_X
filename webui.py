@@ -189,7 +189,7 @@ def init_default_configs():
             "pypi_mirror": "https://pypi.tuna.tsinghua.edu.cn/simple",
             "github_mirror": "",
             "github_pat": "",
-            "plugins_index_repo": "IntelliMarkets/Jianer_Plugins_Index",
+            "plugins_index_repo": "MacroSTAR-Org/Unisphere",
             "username": "lunarx",
             "password_hash": hash_password("lunarx"),
             "session_secret": secrets.token_hex(32)
@@ -204,7 +204,7 @@ def init_default_configs():
                 webui_config["github_pat"] = ""
                 updated = True
             if "plugins_index_repo" not in webui_config:
-                webui_config["plugins_index_repo"] = "IntelliMarkets/Jianer_Plugins_Index"
+                webui_config["plugins_index_repo"] = "MacroSTAR-Org/Unisphere"
                 updated = True
             if "username" not in webui_config:
                 webui_config["username"] = "lunarx"
@@ -796,7 +796,7 @@ def get_available_plugins():
         
         github_mirror = webui_config.get('github_mirror', '').strip()
         github_pat = webui_config.get('github_pat', '').strip()
-        plugins_index_repo = webui_config.get('plugins_index_repo', 'IntelliMarkets/Jianer_Plugins_Index')
+        plugins_index_repo = webui_config.get('plugins_index_repo', 'MacroSTAR-Org/Unisphere')
         
         headers = {}
         if github_pat:
@@ -917,7 +917,7 @@ def install_plugin():
     plugin_path_in_repo = data.get('path')
     use_pypi_mirror = data.get('use_pypi_mirror', False)
     pypi_mirror = data.get('pypi_mirror', '')
-    plugins_index_repo_name_only = data.get('plugins_index_repo_name_only', 'Jianer_Plugins_Index')
+    plugins_index_repo_name_only = data.get('plugins_index_repo_name_only', 'Unisphere')
 
     def generate_install_logs():
         def log_progress(msg):
