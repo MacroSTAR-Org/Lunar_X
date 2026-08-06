@@ -120,7 +120,8 @@ async def _extract_reply_content(bot, event):
                 result = await bot.diy.get_message(
                     message_scene='group', peer_id=group_id, message_seq=int(reply_id))
                 if result and result.get('status') == 'ok':
-                    msg = result.get('data', {}).get('message', {})
+                    # Milky IncomingMessage 的 segments 位于 data 顶层（非 data.message.segments）
+                    msg = result.get('data', {})
                     segs = msg.get('segments', []) if isinstance(msg, dict) else []
                     text = ''.join(s.get('data', {}).get('text', '')
                                    for s in segs if s.get('type') == 'text')
