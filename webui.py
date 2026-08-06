@@ -8,12 +8,13 @@ import subprocess
 import shutil
 import zipfile
 import logging
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from functools import wraps
 from flask import Flask, render_template, request, jsonify, stream_with_context, Response, session, redirect, url_for
 from flask.logging import default_handler
 import sys
 import re
+import psutil
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -247,6 +248,179 @@ def login():
 def logout():
     session.clear()
     return jsonify({'message': '已退出登录'})
+
+
+def _dir_size(path):
+    """递归计算目录大小（字节）"""
+    total = 0
+    try:
+        for root, dirs, files in os.walk(path):
+            for f in files:
+                try:
+                    total += os.path.getsize(os.path.join(root, f))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return total
+
+
+def _find_bot_process():
+    """查找 Lunar X 主进程（python main.py）。
+
+    Windows venv 的 python.exe 是启动器（会再拉起真解释器），
+    优先返回非 venv 路径的真身，避免读到启动器的空数据。
+    """
+    candidates = []
+    try:
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+            try:
+                cmdline = proc.info.get('cmdline') or []
+                if any('main.py' in c for c in cmdline):
+                    candidates.append(proc)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except Exception:
+        pass
+    if not candidates:
+        return None
+    # 非 venv 启动器的优先（真解释器进程）
+    for proc in candidates:
+        cl = ' '.join(proc.info.get('cmdline') or [])
+        if '.venv' not in cl and '\\venv\\' not in cl:
+            return proc
+    return candidates[0]
+
+
+def _count_messages_by_day(days=7):
+    """统计日志中近 N 天每日消息数（接收+发送）"""
+    result = {}
+    today = date.today()
+    for i in range(days - 1, -1, -1):
+        result[(today - timedelta(days=i)).isoformat()] = {'received': 0, 'sent': 0}
+    try:
+        with open(LOG_FILE, 'r', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                m = re.match(r'\[(\d{4}-\d{2}-\d{2})', line)
+                if not m:
+                    continue
+                day = m.group(1)
+                if day in result:
+                    if '收到来自' in line:
+                        result[day]['received'] += 1
+                    elif '发送消息' in line:
+                        result[day]['sent'] += 1
+    except OSError:
+        pass
+    return result
+
+
+def _check_qq_online():
+    """通过 Milky API 探测 QQ 协议端在线状态"""
+    try:
+        with open(CONFIG_JSON_PATH, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+        server = cfg.get('milky_server', '')
+        token = cfg.get('milky_token', '')
+        if not server:
+            return {'online': False, 'detail': '未配置 Milky 协议端 (milky_server)'}
+        headers = {'Content-Type': 'application/json'}
+        if token:
+            headers['Authorization'] = f'Bearer {token}'
+        resp = requests.post(f"{server}/api/get_login_info", json={}, headers=headers, timeout=4)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get('status') == 'ok':
+                uin = data.get('data', {}).get('uin')
+                nickname = data.get('data', {}).get('nickname')
+                return {'online': True, 'detail': f'QQ {uin} ({nickname}) 在线', 'uin': uin}
+            return {'online': False, 'detail': f"协议端响应异常: {data.get('message', '未知')}"}
+        if resp.status_code == 401:
+            return {'online': False, 'detail': '协议端鉴权失败（milky_token 不匹配）'}
+        return {'online': False, 'detail': f'协议端 HTTP {resp.status_code}'}
+    except requests.exceptions.ConnectionError:
+        return {'online': False, 'detail': '协议端未启动或无法连接'}
+    except Exception as e:
+        return {'online': False, 'detail': str(e)}
+
+
+@app.route('/api/dashboard', methods=['GET'])
+def get_dashboard():
+    """数据看板聚合数据"""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    data = {}
+
+    # 1. 数据占用量（Lunar_X 相关目录）
+    dirs = {}
+    for name in ('logs', 'plugins', 'uploads', 'templates', 'core'):
+        path = os.path.join(base_dir, name)
+        dirs[name] = _dir_size(path) if os.path.exists(path) else 0
+    dirs['config_files'] = sum(
+        os.path.getsize(p) if os.path.exists(p) else 0
+        for p in (CONFIG_JSON_PATH, ADMIN_JSON_PATH, WEBUI_JSON_PATH, APPSETTINGS_PATH))
+    data['storage'] = {
+        'dirs': dirs,
+        'total': sum(dirs.values()),
+        'log_file': os.path.getsize(LOG_FILE) if os.path.exists(LOG_FILE) else 0,
+    }
+
+    # 2. 系统运行情况
+    try:
+        vm = psutil.virtual_memory()
+        disk = psutil.disk_usage(base_dir[:3] if os.name == 'nt' else '/')
+        data['system'] = {
+            'cpu_percent': psutil.cpu_percent(interval=0.5),
+            'memory_total': vm.total,
+            'memory_used': vm.used,
+            'memory_percent': vm.percent,
+            'disk_total': disk.total,
+            'disk_used': disk.used,
+            'disk_percent': disk.percent,
+            'boot_time': psutil.boot_time(),
+        }
+    except Exception as e:
+        data['system'] = {'error': str(e)}
+
+    # 3. Bot 进程 + CPU
+    bot_proc = _find_bot_process()
+    if bot_proc:
+        try:
+            cpu_times = bot_proc.cpu_times()
+            cpu_seconds = cpu_times.user + cpu_times.system
+            mem = bot_proc.memory_info()
+            uptime = time.time() - bot_proc.create_time()
+            day_start = time.mktime(date.today().timetuple())
+            if bot_proc.create_time() < day_start:
+                # 进程今日 0 点前启动：按今日经过时间比例估算今日 CPU 时长
+                elapsed_today = max(time.time() - day_start, 0)
+                cpu_seconds_today = cpu_seconds * elapsed_today / max(uptime, 1)
+            else:
+                cpu_seconds_today = cpu_seconds
+            data['bot'] = {
+                'running': True,
+                'pid': bot_proc.pid,
+                'cpu_seconds': cpu_seconds,
+                'cpu_seconds_today': cpu_seconds_today,
+                'memory_bytes': mem.rss,
+                'uptime': uptime,
+                'create_time': bot_proc.create_time(),
+            }
+        except Exception:
+            data['bot'] = {'running': True, 'pid': bot_proc.pid}
+    else:
+        data['bot'] = {'running': False}
+
+    # 4. 在线情况
+    data['qq'] = _check_qq_online()
+
+    # 5. 7 天消息统计
+    msg_by_day = _count_messages_by_day(7)
+    data['messages'] = {
+        'days': [{'date': d, **msg_by_day[d]} for d in sorted(msg_by_day)],
+        'total_7d': sum(v['received'] + v['sent'] for v in msg_by_day.values()),
+    }
+
+    return jsonify(data)
 
 @app.route('/api/logs', methods=['GET'])
 def get_logs():

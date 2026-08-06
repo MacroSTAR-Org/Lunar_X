@@ -436,7 +436,9 @@
  <h1>Lunar X</h1>
  <small>控制面板</small>
  </div>
- <div class="nav-item active" data-tab="protocol">协议端配置
+ <div class="nav-item active" data-tab="dashboard">数据看板
+ </div>
+ <div class="nav-item" data-tab="protocol">协议端配置
  </div>
  <div class="nav-item" data-tab="bot">Bot端配置
  </div>
@@ -469,6 +471,29 @@
  </div>
  
  <div class="main-content">
+
+ <div class="tab-content active" id="dashboard">
+ <div class="card">
+ <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+ <div>
+ <h2>数据看板</h2>
+ <small style="color: var(--text-3);">系统运行状态一览（每 10 秒自动刷新）</small>
+ </div>
+ <button class="btn-secondary" onclick="loadDashboard()">刷新</button>
+ </div>
+ <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px;" id="dashCards">
+ <!-- 卡片由 JS 填充 -->
+ </div>
+ </div>
+ <div class="card">
+ <div class="card-header">
+ <h2>7 天消息统计</h2>
+ <small style="color: var(--text-3);">近 7 天接收/发送消息数</small>
+ </div>
+ <div id="dashChart" style="width: 100%;"></div>
+ </div>
+ </div>
+
  <div class="tab-content active" id="protocol">
  <div class="card">
  <div class="card-header">
@@ -1248,6 +1273,7 @@
         window.addEventListener('load', function() {
 loadConfigs();
 loadAuthStatus();
+loadDashboard();
 applySavedTheme();
 loadConsoleHistory();
 connectConsoleStream();
@@ -1429,6 +1455,144 @@ loadPersonaConfig();
                 showToast('保存失败: ' + e.message, 'error');
             }
         }
+
+
+        /* ===== 数据看板 ===== */
+        function fmtBytes(b) {
+            if (b === 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let i = 0;
+            while (b >= 1024 && i < units.length - 1) { b /= 1024; i++; }
+            return b.toFixed(1) + ' ' + units[i];
+        }
+
+        function fmtDuration(sec) {
+            if (sec < 60) return Math.floor(sec) + '秒';
+            if (sec < 3600) return Math.floor(sec / 60) + '分' + Math.floor(sec % 60) + '秒';
+            const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+            return h + '小时' + m + '分';
+        }
+
+        function fmtTime(ts) {
+            const d = new Date(ts * 1000);
+            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+        }
+
+        function dashCard(label, value, sub, accent) {
+            return '<div style="background: var(--bg-btn2); border: 1px solid var(--border-input); border-radius: 10px; padding: 16px;">' +
+                '<div style="font-size: 12.5px; color: var(--text-dim); margin-bottom: 8px;">' + label + '</div>' +
+                '<div style="font-size: 19px; font-weight: 600; color: ' + (accent || 'var(--text)') + ';">' + value + '</div>' +
+                (sub ? '<div style="font-size: 12px; color: var(--text-3); margin-top: 6px;">' + sub + '</div>' : '') +
+                '</div>';
+        }
+
+        function renderDashChart(days) {
+            const el = document.getElementById('dashChart');
+            const W = 900, H = 220, PL = 46, PR = 16, PT = 16, PB = 34;
+            const n = days.length;
+            const maxVal = Math.max(1, ...days.map(d => d.received + d.sent));
+            const cw = (W - PL - PR) / Math.max(n - 1, 1);
+            const px = i => PL + i * cw;
+            const py = v => PT + (H - PT - PB) * (1 - v / maxVal);
+
+            let points = '', bars = '', labels = '';
+            days.forEach((d, i) => {
+                const v = d.received + d.sent;
+                const x = px(i), y = py(v);
+                points += (i ? ' ' : '') + x.toFixed(1) + ',' + y.toFixed(1);
+                const barH = (H - PT - PB) * (v / maxVal);
+                bars += '<rect x="' + (x - cw * 0.28).toFixed(1) + '" y="' + (H - PB - barH).toFixed(1) +
+                        '" width="' + (cw * 0.56).toFixed(1) + '" height="' + barH.toFixed(1) +
+                        '" fill="' + (v > 0 ? 'var(--accent)' : 'var(--border-input)') + '" opacity="0.55" rx="3"></rect>';
+                const short = d.date.slice(5);
+                labels += '<text x="' + x.toFixed(1) + '" y="' + (H - 14) + '" text-anchor="middle" fill="var(--text-3)" font-size="11">' + short + '</text>';
+                if (v > 0) {
+                    labels += '<text x="' + x.toFixed(1) + '" y="' + (py(v) - 8).toFixed(1) + '" text-anchor="middle" fill="var(--text)" font-size="11">' + v + '</text>';
+                }
+            });
+
+            let grid = '';
+            for (let g = 0; g <= 4; g++) {
+                const gy = PT + (H - PT - PB) * (g / 4);
+                const val = Math.round(maxVal * (1 - g / 4));
+                grid += '<line x1="' + PL + '" y1="' + gy.toFixed(1) + '" x2="' + (W - PR) + '" y2="' + gy.toFixed(1) + '" stroke="var(--border-input)" stroke-width="1" stroke-dasharray="3,3"></line>';
+                grid += '<text x="' + (PL - 8) + '" y="' + (gy + 4).toFixed(1) + '" text-anchor="end" fill="var(--text-3)" font-size="11">' + val + '</text>';
+            }
+
+            el.innerHTML = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width: 100%; height: auto; display: block;">' +
+                grid + bars +
+                '<polyline points="' + points + '" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"></polyline>' +
+                labels + '</svg>';
+        }
+
+        async function loadDashboard() {
+            try {
+                const resp = await fetch('/api/dashboard');
+                if (!resp.ok) return;
+                const d = await resp.json();
+                const cards = [];
+
+                // 在线情况
+                if (d.qq && d.qq.online) {
+                    cards.push(dashCard('QQ 在线状态', '在线', d.qq.detail, 'var(--success)'));
+                } else {
+                    cards.push(dashCard('QQ 在线状态', '离线', (d.qq && d.qq.detail) || '未知', '#d64550'));
+                }
+                // Bot 进程
+                if (d.bot && d.bot.running) {
+                    cards.push(dashCard('Bot 进程', '运行中 (PID ' + d.bot.pid + ')', '运行时长 ' + fmtDuration(d.bot.uptime), 'var(--success)'));
+                } else {
+                    cards.push(dashCard('Bot 进程', '未运行', 'Lunar X 主进程未启动', '#d64550'));
+                }
+                // 系统 CPU
+                if (d.system && d.system.cpu_percent !== undefined) {
+                    const cpuColor = d.system.cpu_percent > 80 ? '#d64550' : 'var(--text)';
+                    cards.push(dashCard('系统 CPU 占用', d.system.cpu_percent.toFixed(1) + '%', '实时采样', cpuColor));
+                }
+                // 内存
+                if (d.system && d.system.memory_total) {
+                    cards.push(dashCard('系统内存占用', d.system.memory_percent.toFixed(1) + '%',
+                        fmtBytes(d.system.memory_used) + ' / ' + fmtBytes(d.system.memory_total)));
+                }
+                // Bot 进程内存
+                if (d.bot && d.bot.memory_bytes) {
+                    cards.push(dashCard('Bot 进程内存', fmtBytes(d.bot.memory_bytes), 'Lunar X 主进程'));
+                }
+                // CPU 时长
+                if (d.bot && d.bot.cpu_seconds !== undefined) {
+                    cards.push(dashCard('CPU 占用（今日 / 总共）',
+                        fmtDuration(d.bot.cpu_seconds_today) + ' / ' + fmtDuration(d.bot.cpu_seconds),
+                        'Lunar X 主进程累计 CPU 时间'));
+                }
+                // 数据占用量
+                if (d.storage) {
+                    const sub = d.storage.dirs ? Object.entries(d.storage.dirs)
+                        .filter(([k]) => ['logs', 'plugins', 'uploads', 'core'].includes(k))
+                        .map(([k, v]) => k + ': ' + fmtBytes(v)).join(' · ') : '';
+                    cards.push(dashCard('数据占用量', fmtBytes(d.storage.total), sub));
+                }
+                // 系统磁盘
+                if (d.system && d.system.disk_total) {
+                    cards.push(dashCard('系统磁盘占用', d.system.disk_percent.toFixed(1) + '%',
+                        fmtBytes(d.system.disk_used) + ' / ' + fmtBytes(d.system.disk_total)));
+                }
+                // 7 天消息
+                if (d.messages) {
+                    cards.push(dashCard('7 天消息总数', d.messages.total_7d, '接收 + 发送'));
+                }
+                // 系统运行时长
+                if (d.system && d.system.boot_time) {
+                    cards.push(dashCard('系统运行时长', fmtDuration(Date.now() / 1000 - d.system.boot_time), '开机时间 ' + fmtTime(d.system.boot_time)));
+                }
+
+                document.getElementById('dashCards').innerHTML = cards.join('');
+                if (d.messages && d.messages.days) {
+                    renderDashChart(d.messages.days);
+                }
+            } catch (e) { /* 忽略 */ }
+        }
+
+        setInterval(loadDashboard, 10000);
 </script>
 
 
