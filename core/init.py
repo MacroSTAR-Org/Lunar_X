@@ -1,12 +1,15 @@
 from .bot import LunarBot
 from .connection import WebSocketConnection
+from .transport import BaseTransport, MilkyTransport
 from .plugin_manager import PluginManager
 from .logger import logger, LunarLogger
 from .message import (
     MessageBuilder, BaseSegment, TextSegment, ImageSegment, AtSegment, FaceSegment,
-    RecordSegment, ReplySegment, ForwardNodeSegment, ForwardSegment, ReplyUtils
+    RecordSegment, VideoSegment, FileSegment, ReplySegment, ForwardNodeSegment, ForwardSegment, ReplyUtils
 )
 from .diy import DiyAPI
+from .onebot_adapter import OneBotAdapter
+from .milky_adapter import MilkyAdapter
 from .events import (
     Event, MessageEvent, GroupMessageEvent, PrivateMessageEvent,
     NoticeEvent, GroupUploadNoticeEvent, GroupAdminNoticeEvent,
@@ -19,8 +22,8 @@ from .events import (
 )
 
 __all__ = [
-    'LunarBot', 'WebSocketConnection', 'PluginManager', 'logger', 
-    'LunarLogger', 'MessageBuilder', 'DiyAPI', 'ReplyUtils',
+    'LunarBot', 'WebSocketConnection', 'BaseTransport', 'MilkyTransport', 'PluginManager', 'logger', 
+    'LunarLogger', 'MessageBuilder', 'DiyAPI', 'ReplyUtils', 'OneBotAdapter', 'MilkyAdapter',
     'Event', 'MessageEvent', 'GroupMessageEvent', 'PrivateMessageEvent',
     'NoticeEvent', 'GroupUploadNoticeEvent', 'GroupAdminNoticeEvent',
     'GroupIncreaseNoticeEvent', 'GroupDecreaseNoticeEvent',
@@ -33,5 +36,5 @@ __all__ = [
     'EventFactory',
     'Events',
     'BaseSegment', 'TextSegment', 'ImageSegment', 'AtSegment', 'FaceSegment', 
-    'RecordSegment', 'ReplySegment', 'ForwardNodeSegment', 'ForwardSegment'
+    'RecordSegment', 'VideoSegment', 'FileSegment', 'ReplySegment', 'ForwardNodeSegment', 'ForwardSegment'
 ]

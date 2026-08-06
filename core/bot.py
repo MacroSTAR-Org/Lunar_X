@@ -14,11 +14,24 @@ from .events import Event, MessageEvent, PrivateMessageEvent, GroupMessageEvent,
 class LunarBot:
     def __init__(self, config: Dict[str, Any], main_loop: asyncio.AbstractEventLoop):
         self.config = config
-        self.connection = WebSocketConnection(
-            config['ws_server'],
-            config.get('token'),
-            max_retries=5
-        )
+        self.protocol_name = config.get('protocol', 'onebot_v11')
+        if self.protocol_name == 'milky':
+            from .transport import MilkyTransport
+            from .milky_adapter import MilkyAdapter
+            milky_server = config.get('milky_server', 'http://127.0.0.1:3803')
+            milky_token = config.get('milky_token') or config.get('token')
+            self.connection = MilkyTransport(milky_server, milky_token, max_retries=5)
+            self.protocol = MilkyAdapter(self)
+            logger.info(f"协议模式: Milky (协议端: {milky_server})")
+        else:
+            from .onebot_adapter import OneBotAdapter
+            self.connection = WebSocketConnection(
+                config['ws_server'],
+                config.get('token'),
+                max_retries=5
+            )
+            self.protocol = OneBotAdapter(self)
+            logger.info("协议模式: OneBot v11")
         self.plugin_manager = PluginManager(self, config, main_loop) 
         self.message_count = {'sent': 0, 'received': 0}
         self.start_time = time.time()
@@ -27,7 +40,6 @@ class LunarBot:
         self.reply = ReplyUtils(self)
         logger.configure_from_config(config)
         self.plugin_logger = logger.get_logger('LunarPlugins')
-        print(self.config.get('auto_reload_plugins'))
         self.msg = MessageBuilder(self)
         self.diy = DiyAPI(self)
         self._register_native_commands()
@@ -46,19 +58,14 @@ class LunarBot:
     async def _diy_call(self, action: str, params: Dict[str, Any]) -> Dict[str, Any]:
         try:
             processed_params = self._convert_segments_to_dicts(params)
-            request_data = {
-                'action': action,
-                'params': processed_params
-            }
-            
-            response_data = await self.connection.send(request_data, wait_for_response=True)
+            response_data = await self.protocol.call_api(action, processed_params)
             
             if response_data:
                 if response_data.get('status') == 'ok':
                     logger.success(f"调用自定义API成功: {action}, 参数: {params}, 响应: {response_data}")
                     return {'status': 'ok', 'data': response_data.get('data'), 'raw_response': response_data}
                 else:
-                    error_msg = response_data.get('message', '未知错误')
+                    error_msg = response_data.get('msg') or response_data.get('message', '未知错误')
                     logger.error(f"调用自定义API失败 (服务器响应错误): {action}, 错误信息: {error_msg}, 响应: {response_data}")
                     return {'status': 'failed', 'msg': error_msg, 'raw_response': response_data}
             else:
@@ -73,7 +80,10 @@ class LunarBot:
             return {'status': 'error', 'msg': str(e)}
 
     async def _handle_event(self, event_data: Dict[str, Any]):
-        event = EventFactory.create_event(event_data, self.msg)
+        if self.protocol_name == 'milky':
+            event = self.protocol.parse_event(event_data)
+        else:
+            event = EventFactory.create_event(event_data, self.msg)
         if isinstance(event, MessageEvent):
             await self._handle_message_event(event)
         elif isinstance(event, NoticeEvent):
@@ -439,47 +449,18 @@ class LunarBot:
             logger.warning("消息段为空，不发送")
             return False
 
-        api_message_segments = []
-        for segment in message_segments:
-            if isinstance(segment, BaseSegment):
-                api_message_segments.append(segment.to_dict())
-            elif isinstance(segment, dict):
-                if segment.get('type') == 'at':
-                    qq = segment.get('data', {}).get('qq')
-                    if isinstance(qq, int):
-                        segment['data']['qq'] = str(qq)
-                api_message_segments.append(segment)
-            else:
-                logger.warning(f"不支持的发送消息段类型，跳过: {type(segment)}")
-                continue
-
         try:
             log_message = self._format_message_for_log(message_segments)
-            
-            request_payload = None
+
             if group_id:
-                request_payload = {
-                    'action': 'send_group_msg',
-                    'params': {
-                        'group_id': int(group_id),
-                        'message': api_message_segments
-                    }
-                }
                 logger.info(f"向群 {group_id} 发送消息: {log_message}")
+                response_data = await self.protocol.send_message(message_segments, group_id=group_id)
             elif user_id:
-                request_payload = {
-                    'action': 'send_private_msg',
-                    'params': {
-                        'user_id': int(user_id),
-                        'message': api_message_segments
-                    }
-                }
                 logger.info(f"向用户 {user_id} 发送消息: {log_message}")
+                response_data = await self.protocol.send_message(message_segments, user_id=user_id)
             else:
                 logger.error("发送消息需要指定user_id或group_id")
                 return False
-            
-            response_data = await self.connection.send(request_payload, wait_for_response=True)
 
             if response_data and response_data.get('status') == 'ok':
                 logger.debug(f"消息发送成功并收到服务器确认: {response_data}")
@@ -497,14 +478,9 @@ class LunarBot:
             logger.error(f"发送消息段失败: {e}")
             return False
 
-    async def del_message(self, message_id: int):
+    async def del_message(self, message_id: int, user_id: Optional[int] = None, group_id: Optional[int] = None):
         try:
-            result = await self.connection.send({
-                'action': 'delete_msg',
-                'params': {
-                    'message_id': message_id
-                }
-            })
+            result = await self.protocol.delete_message(message_id, user_id=user_id, group_id=group_id)
             logger.info(f"撤回消息 {message_id}")
             return result
         except Exception as e:
@@ -588,61 +564,25 @@ class LunarBot:
             return False
 
         try:
-            formatted_messages = []
-            for msg in messages:
-                if isinstance(msg, ForwardNodeSegment):
-                    formatted_messages.append(msg.to_dict())
-                elif isinstance(msg, dict):
-                    if msg.get('type') == 'node' and 'data' in msg:
-                        data = msg['data'].copy()
-                        if 'user_id' in data and isinstance(data['user_id'], int):
-                            data['user_id'] = str(data['user_id'])
-                        formatted_messages.append({'type': 'node', 'data': data})
-                    else:
-                        formatted_messages.append(msg)
-                else:
-                    logger.warning(f"不支持的转发消息节点类型，跳过: {type(msg)}")
-            
-            params = {'messages': formatted_messages}
-            
             if group_id:
-                params['group_id'] = group_id
-                await self.connection.send({
-                    'action': 'send_group_forward_msg',
-                    'params': params
-                })
                 logger.info(f"向群 {group_id} 发送消息: [forward_msg]")
             elif user_id:
-                params['user_id'] = user_id
-                await self.connection.send({
-                    'action': 'send_private_forward_msg',
-                    'params': params
-                })
                 logger.info(f"向用户 {user_id} 发送消息: [forward_msg]")
             else:
                 logger.error("发送转发消息需要指定user_id或group_id")
                 return False
-            
-            self.message_count['sent'] += 1
-            return True
-            
+
+            success = await self.protocol.send_forward(messages, group_id=group_id, user_id=user_id)
+            if success:
+                self.message_count['sent'] += 1
+            return success
+
         except Exception as e:
             logger.error(f"发送合并转发消息失败: {e}")
             return False
 
     async def get_forward_msg(self, message_id: str) -> Dict:
-        try:
-            await self.connection.send({
-                'action': 'get_forward_msg',
-                'params': {
-                    'message_id': message_id
-                }
-            })
-            logger.info(f"获取合并转发消息: {message_id}")
-            return {'status': 'ok', 'message_id': message_id}
-        except Exception as e:
-            logger.error(f"获取合并转发消息失败: {e}")
-            return {'status': 'error', 'msg': str(e)}
+        return await self.protocol.get_forward_message(message_id)
 
     async def restart(self):
         logger.info("正在执行框架重启...")
@@ -650,33 +590,6 @@ class LunarBot:
         await self._cleanup_resources()
         os._exit(0)
     
-    async def diy(self, action: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        try:
-            request_data = {
-                'action': action,
-                'params': params
-            }
-            response_data = await self.connection.send(request_data, wait_for_response=True)
-            
-            if response_data:
-                if response_data.get('status') == 'ok':
-                    logger.success(f"调用自定义API成功: {action}, 参数: {params}, 响应: {response_data}")
-                    return {'status': 'ok', 'data': response_data.get('data'), 'raw_response': response_data}
-                else:
-                    error_msg = response_data.get('message', '未知错误')
-                    logger.error(f"DIY API调用失败 (服务器响应错误): {action}, 错误信息: {error_msg}, 响应: {response_data}")
-                    return {'status': 'failed', 'msg': error_msg, 'raw_response': response_data}
-            else:
-                logger.error(f"DIY API调用失败: {action}, 未收到服务器响应")
-                return {'status': 'failed', 'msg': '未收到服务器响应'}
-            
-        except TimeoutError:
-            logger.error(f"DIY API调用 {action} 超时，参数: {params}")
-            return {'status': 'timeout', 'msg': '等待服务器响应超时'}
-        except Exception as e:
-            logger.error(f"DIY API调用 {action} 时发生错误: {e}, 参数: {params}")
-            return {'status': 'error', 'msg': str(e)}
-
     async def _cleanup_resources(self):
         logger.info("正在清理资源...")
         await self._handle_plugin_event(Events.LunarStopListen())
