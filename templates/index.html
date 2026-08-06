@@ -444,6 +444,8 @@
  </div>
  <div class="nav-item" data-tab="users">用户管理
  </div>
+ <div class="nav-item" data-tab="persona">人格设置
+ </div>
  <div class="nav-item" data-tab="console">控制台
  </div>
  <div class="sidebar-user">
@@ -1249,6 +1251,7 @@ loadAuthStatus();
 applySavedTheme();
 loadConsoleHistory();
 connectConsoleStream();
+loadPersonaConfig();
         });
     
 
@@ -1387,8 +1390,75 @@ connectConsoleStream();
         function clearConsole() {
             document.getElementById('consoleLog').textContent = '';
         }
+
+
+        /* ===== 人格设置 ===== */
+        async function loadPersonaConfig() {
+            try {
+                const resp = await fetch('/api/config/config');
+                const data = await resp.json();
+                const persona = (data.ai && data.ai.persona) || {};
+                document.getElementById('personaEnabled').value = persona.enabled === false ? 'false' : 'true';
+                document.getElementById('personaNickname').value = persona.nickname || '';
+                document.getElementById('personaPrompt').value = persona.system_prompt || '';
+            } catch (e) { /* 忽略 */ }
+        }
+
+        async function savePersonaConfig() {
+            try {
+                const resp = await fetch('/api/config/config');
+                const data = await resp.json();
+                if (!data.ai) data.ai = {};
+                data.ai.persona = {
+                    enabled: document.getElementById('personaEnabled').value === 'true',
+                    nickname: document.getElementById('personaNickname').value.trim(),
+                    system_prompt: document.getElementById('personaPrompt').value
+                };
+                const saveResp = await fetch('/api/config/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const saveData = await saveResp.json();
+                if (saveResp.ok) {
+                    showToast('人格设置已保存');
+                } else {
+                    showToast('保存失败: ' + (saveData.error || ''), 'error');
+                }
+            } catch (e) {
+                showToast('保存失败: ' + e.message, 'error');
+            }
+        }
 </script>
 
+
+
+ <div class="tab-content" id="persona">
+ <div class="card">
+ <div class="card-header">
+ <h2>人格设置</h2>
+ <small style="color: var(--text-3);">AI 人格昵称与提示词。群聊中以昵称开头即可直接对话（如 "小月 今天天气"）</small>
+ </div>
+ <div class="form-group">
+ <label for="personaEnabled">启用人格</label>
+ <select id="personaEnabled">
+ <option value="true">启用</option>
+ <option value="false">禁用</option>
+ </select>
+ </div>
+ <div class="form-group">
+ <label for="personaNickname">昵称</label>
+ <input type="text" id="personaNickname" placeholder="Example: 小月">
+ <small style="color: var(--text-3);">群聊中消息以该昵称开头即触发 AI 回复</small>
+ </div>
+ <div class="form-group">
+ <label for="personaPrompt">人格提示词</label>
+ <textarea id="personaPrompt" rows="5" placeholder="你是小月，一个温柔可爱的 AI 助手..."></textarea>
+ <small style="color: var(--text-3);">优先于 Bot 配置中的通用系统提示词</small>
+ </div>
+ <button onclick="savePersonaConfig()">保存人格设置</button>
+ </div>
+ </div>
 
  <div class="tab-content" id="console">
  <div class="card">

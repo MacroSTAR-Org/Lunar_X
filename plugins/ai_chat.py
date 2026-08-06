@@ -1,19 +1,21 @@
 # AI 对话插件：OpenAI 兼容接口
-# 用法: $ai <问题> （或开启 direct_chat 后，私聊直接对话 / 群聊 @机器人 对话）
+# 触发方式（可叠加）：
+#   $ai <问题> 命令；私聊任意消息直接对话；群聊 @机器人 对话；群聊以人格昵称开头（如 "小月 今天天气"）
 #
-# 配置（config.json 的 "ai" 块，可在 WebUI Bot 配置中编辑）：
+# 配置（config.json 的 "ai" 块，可在 WebUI 中编辑）：
 #   enabled:        是否启用
 #   api_base:       OpenAI 兼容接口地址，如 https://api.deepseek.com/v1
 #   api_key:        API Key（留空时回退使用 config 的 openai_key / deepseek_key）
 #   model:          模型名，如 deepseek-chat / gpt-4o-mini
-#   system_prompt:  系统提示词
 #   temperature:    采样温度 (0~2)
 #   max_tokens:     最大生成 token 数
 #   max_history:    每个会话保留的上下文轮数
 #   direct_chat:    是否支持直接对话（私聊任意消息 / 群聊 @机器人）
 #   allow_users:    允许使用的用户 QQ 列表（空 = 全部）
 #   allow_groups:   允许使用的群号列表（空 = 全部）
-# 触发方式用 Any（永久触发）：插件内部自行判断命令模式 / 直接对话模式
+#   persona:        人格设置（WebUI「人格设置」页）
+#     nickname:       昵称，群聊以该昵称开头即触发对话
+#     system_prompt:  人格提示词（优先于 ai.system_prompt）
 TRIGGHT_KEYWORD = 'Any'
 PLT_ST = 1
 HELP_MESSAGE = 'AI 对话，用法: $ai <问题>'
@@ -66,13 +68,29 @@ def _history_key(event):
     return f'private:{event.user_id}'
 
 
-def _extract_question(event, args, cfg):
+def _extract_question(event, args, cfg, nickname=''):
     if args and args.strip():
         return args.strip()
+    # 去掉 @ 提及前缀
+    text = re.sub(r'@\S+\s*', '', event.get_text())
+    # 昵称前缀剥离（"小月 今天天气" → "今天天气"）
+    if nickname:
+        text = text.strip()
+        if text.startswith(nickname):
+            rest = text[len(nickname):]
+            rest = re.sub(r'^[，。,.!！?？:：、;；\s]+', '', rest)
+            return rest
     if cfg.get('direct_chat'):
-        text = re.sub(r'@\S+\s*', '', event.get_text())
         return text.strip()
     return ''
+
+
+def _persona(cfg):
+    return cfg.get('persona', {}) or {}
+
+
+def _persona_nickname(cfg):
+    return (_persona(cfg).get('nickname') or '').strip()
 
 
 async def _ask_ai(bot, cfg, event, question):
@@ -85,7 +103,10 @@ async def _ask_ai(bot, cfg, event, question):
     key = _history_key(event)
     history = _histories.get(key)
     if not history:
-        history = [{'role': 'system', 'content': cfg.get('system_prompt', '你是 Lunar X 的 AI 助手，请用中文简洁友好地回答问题。')}]
+        # 人格提示词优先，其次通用提示词
+        system_prompt = (_persona(cfg).get('system_prompt') or cfg.get('system_prompt')
+                         or '你是 Lunar X 的 AI 助手，请用中文简洁友好地回答问题。')
+        history = [{'role': 'system', 'content': system_prompt}]
     history.append({'role': 'user', 'content': question})
 
     payload = {
@@ -129,23 +150,25 @@ async def on_message(event, bot):
     if not _check_permission(event, cfg):
         return False
 
+    group_id = getattr(event, 'group_id', None)
     is_command = bool(event.is_command and event.command == 'ai')
-    direct = cfg.get('direct_chat', False) and (
-        not getattr(event, 'group_id', None) or _is_mentioning_bot(event)
-    )
+    direct = cfg.get('direct_chat', False) and (not group_id or _is_mentioning_bot(event))
+    # 昵称触发：群聊消息以人格昵称开头（如 "小月 今天天气"）
+    nickname = _persona_nickname(cfg)
+    nickname_hit = bool(nickname and group_id and event.get_text().startswith(nickname))
 
-    if not (is_command or direct):
+    if not (is_command or direct or nickname_hit):
         return False
 
-    question = _extract_question(event, getattr(event, 'args', ''), cfg)
+    question = _extract_question(event, getattr(event, 'args', ''), cfg, nickname)
     if not question:
         await bot.send('用法: $ai <问题>',
-                       group_id=getattr(event, 'group_id', None),
+                       group_id=group_id,
                        user_id=event.user_id)
         return True
 
     reply = await _ask_ai(bot, cfg, event, question)
     await bot.send(reply,
-                   group_id=getattr(event, 'group_id', None),
+                   group_id=group_id,
                    user_id=event.user_id)
     return True

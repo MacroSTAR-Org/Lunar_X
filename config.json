@@ -10,7 +10,11 @@
     "max_tokens": 2048,
     "model": "deepseek-v4-flash",
     "system_prompt": "你是 Lunar X 的 AI 助手，请用中文简洁友好地回答问题。",
-    "temperature": 1.2
+    "temperature": 1.2,
+    "persona": {
+      "nickname": "小月",
+      "system_prompt": "你是小月，一个温柔可爱的 AI 助手。你说话亲切、简短，偶尔带一点点俏皮。"
+    }
   },
   "answer": [
     114,
