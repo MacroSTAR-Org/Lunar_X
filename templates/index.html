@@ -68,46 +68,48 @@
         .container {
             display: flex;
             min-height: 100vh;
-            max-width: 1400px;
-            margin: 0 auto;
+            width: 100%;
         }
 
         /* ===== 侧边栏 ===== */
         .sidebar {
             width: 200px;
-            padding: 20px 14px;
+            padding: 12px 14px;
             background: var(--bg-sidebar);
             border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
-            gap: 4px;
+            gap: 2px;
             position: sticky;
             top: 0;
             height: 100vh;
+            overflow-y: auto;
+            flex-shrink: 0;
         }
         .sidebar-header {
-            padding: 4px 10px 16px;
+            padding: 2px 10px 10px;
         }
         .sidebar-header h1 {
-            font-size: 17px;
+            font-size: 16px;
             font-weight: 600;
             color: var(--text);
         }
         .sidebar-header small {
             display: block;
-            margin-top: 4px;
+            margin-top: 2px;
             color: var(--text-3);
-            font-size: 12px;
+            font-size: 11.5px;
         }
 
         .nav-item {
-            padding: 10px 12px;
+            padding: 7px 12px;
             border-radius: 8px;
             cursor: pointer;
-            font-size: 13.5px;
+            font-size: 13px;
             color: var(--text-dim);
             transition: background 0.15s, color 0.15s;
             user-select: none;
+            white-space: nowrap;
         }
         .nav-item:hover {
             background: var(--bg-hover);
@@ -120,20 +122,20 @@
 
         .sidebar-user {
             margin-top: auto;
-            padding: 14px 8px 4px;
+            padding: 10px 8px 2px;
             border-top: 1px solid var(--border);
         }
         .sidebar-user .user-row {
             display: flex;
             align-items: center;
             gap: 8px;
-            margin-bottom: 10px;
+            margin-bottom: 6px;
         }
         .sidebar-user .avatar {
-            width: 30px; height: 30px;
+            width: 26px; height: 26px;
             border-radius: 50%;
             display: flex; align-items: center; justify-content: center;
-            font-size: 13px;
+            font-size: 12px;
             font-weight: 600;
             background: var(--accent);
             color: #fff;
@@ -151,8 +153,8 @@
         }
         .sidebar-user .u-actions button {
             flex: 1;
-            padding: 7px 0;
-            font-size: 12px;
+            padding: 5px 0;
+            font-size: 11.5px;
             border-radius: 7px;
             cursor: pointer;
             border: 1px solid var(--border-input);
@@ -170,7 +172,7 @@
 
         /* ===== 主题切换 ===== */
         .theme-switch {
-            margin-top: 12px;
+            margin-top: 8px;
             padding: 0 8px 2px;
         }
         .theme-switch .theme-label {
@@ -198,8 +200,9 @@
         /* ===== 主内容 ===== */
         .main-content {
             flex: 1;
-            padding: 24px 28px;
+            padding: 24px 32px;
             overflow-x: hidden;
+            max-width: calc(100vw - 200px);
         }
 
         .tab-content { display: none; }
@@ -408,22 +411,16 @@
         ::-webkit-scrollbar-thumb { background: var(--border-input); border-radius: 999px; }
         ::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
 
-        /* ===== 响应式 ===== */
+        /* ===== 响应式（窄窗口保持侧边栏在左，仅压缩宽度）===== */
         @media (max-width: 860px) {
-            .container { flex-direction: column; }
-            .sidebar {
-                width: 100%;
-                height: auto;
-                position: static;
-                flex-direction: row;
-                flex-wrap: wrap;
-                align-items: center;
-                padding: 12px;
-            }
-            .sidebar-header { padding: 0 10px; }
-            .sidebar-user { margin-top: 0; margin-left: auto; border-top: none; }
-            .theme-switch { margin-top: 0; }
+            .sidebar { width: 170px; padding: 12px 10px; }
+            .nav-item { padding: 6px 10px; font-size: 12.5px; }
             .main-content { padding: 18px 14px; }
+        }
+        @media (max-width: 640px) {
+            .sidebar { width: 140px; padding: 10px 8px; }
+            .nav-item { padding: 5px 8px; font-size: 12px; }
+            .sidebar-user .u-actions { flex-direction: column; }
         }
     </style>
 
@@ -445,11 +442,11 @@
  <div class="nav-item" data-tab="plugins">插件管理
  </div>
  <div class="nav-item" data-tab="users">用户管理
+ </div> <div class="nav-item" data-tab="persona">人格设置
+ </div> <div class="nav-item" data-tab="console">控制台
  </div>
- <div class="nav-item" data-tab="persona">人格设置
- </div>
- <div class="nav-item" data-tab="console">控制台
- </div>
+
+
  <div class="sidebar-user">
  <div class="user-row">
  <div class="avatar" id="avatarChar">U</div>
@@ -673,7 +670,50 @@
  <button onclick="saveUserConfig()">保存配置</button>
  </div>
  </div>
+ <div class="tab-content" id="persona">
+ <div class="card">
+ <div class="card-header">
+ <h2>人格设置</h2>
+ <small style="color: var(--text-3);">AI 人格昵称与提示词。群聊中以昵称开头即可直接对话（如 "小月 今天天气"）</small>
  </div>
+ <div class="form-group">
+ <label for="personaEnabled">使用名字唤醒</label>
+ <select id="personaEnabled">
+ <option value="true">启用</option>
+ <option value="false">禁用</option>
+ </select>
+ <small style="color: var(--text-3);">开启后，群聊中消息以唤醒词开头即触发 AI 回复</small>
+ </div>
+ <div class="form-group">
+ <label for="personaNicknames">唤醒词（每行一个，支持多个）</label>
+ <textarea id="personaNicknames" rows="3" placeholder="小月&#10;月月"></textarea>
+ </div>
+ <div class="form-group">
+ <label for="personaPrompt">人格提示词</label>
+ <textarea id="personaPrompt" rows="5" placeholder="你是小月，一个温柔可爱的 AI 助手..."></textarea>
+ <small style="color: var(--text-3);">优先于 Bot 配置中的通用系统提示词</small>
+ </div>
+ <button onclick="savePersonaConfig()">保存人格设置</button>
+ </div>
+ </div>
+
+ <div class="tab-content" id="console">
+ <div class="card">
+ <div class="card-header">
+ <h2>控制台</h2>
+ <small style="color: var(--text-3);">框架运行日志（实时，来自 logs/lunarx.log）</small>
+ </div>
+ <div style="display: flex; gap: 16px; align-items: center; margin-bottom: 12px;">
+ <label style="font-size: 13px; color: var(--text-dim); display: flex; align-items: center; gap: 6px; cursor: pointer;">
+ <input type="checkbox" id="consoleAutoScroll" checked style="width: auto;"> 自动滚动
+ </label>
+ <button class="btn-secondary" onclick="clearConsole()">清空</button>
+ </div>
+ <pre id="consoleLog" style="background: #101114; border: 1px solid var(--border); border-radius: 8px; padding: 14px; height: 62vh; overflow-y: auto; font-family: 'Cascadia Code', Consolas, monospace; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; margin: 0;"></pre>
+ </div>
+ </div>
+
+</div>
  </div>
  
  <div class="modal" id="pluginDetailModal">
@@ -1425,7 +1465,10 @@ loadPersonaConfig();
                 const data = await resp.json();
                 const persona = (data.ai && data.ai.persona) || {};
                 document.getElementById('personaEnabled').value = persona.enabled === false ? 'false' : 'true';
-                document.getElementById('personaNickname').value = persona.nickname || '';
+                const nickList = Array.isArray(persona.nicknames) ? persona.nicknames
+                    : (persona.nickname ? [persona.nickname] : []);
+                document.getElementById('personaNicknames').value = nickList.join('
+');
                 document.getElementById('personaPrompt').value = persona.system_prompt || '';
             } catch (e) { /* 忽略 */ }
         }
@@ -1437,7 +1480,9 @@ loadPersonaConfig();
                 if (!data.ai) data.ai = {};
                 data.ai.persona = {
                     enabled: document.getElementById('personaEnabled').value === 'true',
-                    nickname: document.getElementById('personaNickname').value.trim(),
+                    nicknames: document.getElementById('personaNicknames').value.split('
+')
+                        .map(s => s.trim()).filter(Boolean),
                     system_prompt: document.getElementById('personaPrompt').value
                 };
                 const saveResp = await fetch('/api/config/config', {
@@ -1597,50 +1642,7 @@ loadPersonaConfig();
 
 
 
- <div class="tab-content" id="persona">
- <div class="card">
- <div class="card-header">
- <h2>人格设置</h2>
- <small style="color: var(--text-3);">AI 人格昵称与提示词。群聊中以昵称开头即可直接对话（如 "小月 今天天气"）</small>
- </div>
- <div class="form-group">
- <label for="personaEnabled">启用人格</label>
- <select id="personaEnabled">
- <option value="true">启用</option>
- <option value="false">禁用</option>
- </select>
- </div>
- <div class="form-group">
- <label for="personaNickname">昵称</label>
- <input type="text" id="personaNickname" placeholder="Example: 小月">
- <small style="color: var(--text-3);">群聊中消息以该昵称开头即触发 AI 回复</small>
- </div>
- <div class="form-group">
- <label for="personaPrompt">人格提示词</label>
- <textarea id="personaPrompt" rows="5" placeholder="你是小月，一个温柔可爱的 AI 助手..."></textarea>
- <small style="color: var(--text-3);">优先于 Bot 配置中的通用系统提示词</small>
- </div>
- <button onclick="savePersonaConfig()">保存人格设置</button>
- </div>
- </div>
-
- <div class="tab-content" id="console">
- <div class="card">
- <div class="card-header">
- <h2>控制台</h2>
- <small style="color: var(--text-3);">框架运行日志（实时，来自 logs/lunarx.log）</small>
- </div>
- <div style="display: flex; gap: 16px; align-items: center; margin-bottom: 12px;">
- <label style="font-size: 13px; color: var(--text-dim); display: flex; align-items: center; gap: 6px; cursor: pointer;">
- <input type="checkbox" id="consoleAutoScroll" checked style="width: auto;"> 自动滚动
- </label>
- <button class="btn-secondary" onclick="clearConsole()">清空</button>
- </div>
- <pre id="consoleLog" style="background: #101114; border: 1px solid var(--border); border-radius: 8px; padding: 14px; height: 62vh; overflow-y: auto; font-family: 'Cascadia Code', Consolas, monospace; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; margin: 0;"></pre>
- </div>
- </div>
-
-    <!-- 修改密码弹窗 -->
+     <!-- 修改密码弹窗 -->
     <div class="modal" id="passwordModal">
         <div class="modal-content">
             <div class="modal-header">
