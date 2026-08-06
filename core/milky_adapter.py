@@ -339,7 +339,11 @@ class MilkyAdapter:
             elif stype == 'face':
                 result.append({'type': 'face', 'data': {'id': data.get('face_id', 0)}})
             elif stype == 'reply':
-                result.append({'type': 'reply', 'data': {'id': str(data.get('message_seq', 0))}})
+                # Milky 1.2+ 的 reply 段自带被引用内容（segments），一并透传
+                result.append({'type': 'reply', 'data': {
+                    'id': str(data.get('message_seq', 0)),
+                    'quoted_segments': data.get('segments', []),
+                }})
             elif stype == 'image':
                 result.append({'type': 'image', 'data': {'file': data.get('temp_url') or data.get('resource_id', '')}})
             elif stype == 'record':

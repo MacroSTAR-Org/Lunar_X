@@ -109,18 +109,30 @@ def fmt_ts(ts):
 
 
 async def _extract_reply_content(bot, event):
-    """从消息的 reply 段获取被引用消息的文本内容（通过 Milky get_message API）"""
+    """从消息的 reply 段获取被引用消息的文本内容
+
+    优先使用 Milky 协议 reply 段自带的内容（segments），
+    协议端未附带时（如 OneBot）再通过 get_message API 拉取。
+    """
     for seg in getattr(event, 'message', []) or []:
         if seg.type == 'reply':
             reply_id = seg.data.get('id')
             group_id = getattr(event, 'group_id', None)
-            if not reply_id or not group_id:
+            if not reply_id:
+                return None
+            # 1) reply 段自带内容（Milky 1.2+，IncomingSegment 格式）
+            quoted = seg.data.get('quoted_segments') or []
+            text = ''.join(s.get('data', {}).get('text', '')
+                           for s in quoted if s.get('type') == 'text')
+            if text.strip():
+                return text.strip()
+            # 2) 降级：通过 get_message API 拉取（Milky IncomingMessage 的 segments 位于 data 顶层）
+            if not group_id:
                 return None
             try:
                 result = await bot.diy.get_message(
                     message_scene='group', peer_id=group_id, message_seq=int(reply_id))
                 if result and result.get('status') == 'ok':
-                    # Milky IncomingMessage 的 segments 位于 data 顶层（非 data.message.segments）
                     msg = result.get('data', {})
                     segs = msg.get('segments', []) if isinstance(msg, dict) else []
                     text = ''.join(s.get('data', {}).get('text', '')
