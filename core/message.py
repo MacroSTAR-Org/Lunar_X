@@ -65,6 +65,22 @@ class RecordSegment(BaseSegment):
     def file(self) -> str:
         return self.data.get('file', '')
 
+class VideoSegment(BaseSegment):
+    def __init__(self, file: str, cache: bool = True, proxy: bool = True, timeout: int = 30):
+        super().__init__('video', {'file': file, 'cache': cache, 'proxy': proxy, 'timeout': timeout})
+    
+    @property
+    def file(self) -> str:
+        return self.data.get('file', '')
+
+class FileSegment(BaseSegment):
+    def __init__(self, file_id: str, file_name: str = '', file_size: int = 0):
+        super().__init__('file', {'file_id': file_id, 'file_name': file_name, 'file_size': file_size})
+    
+    @property
+    def file_id(self) -> str:
+        return self.data.get('file_id', '')
+
 class ReplySegment(BaseSegment):
     def __init__(self, message_id: Union[int, str]):
         super().__init__('reply', {'id': str(message_id)})
@@ -126,6 +142,14 @@ class MessageBuilder:
         if not os.path.isabs(file) and not (file.startswith('http://') or file.startswith('https://') or file.startswith('base64://')):
             file = os.path.abspath(file)
         return RecordSegment(file, magic, cache, proxy, timeout)
+
+    def video(self, file: str, cache: bool = True, proxy: bool = True, timeout: int = 30) -> VideoSegment:
+        if not os.path.isabs(file) and not (file.startswith('http://') or file.startswith('https://') or file.startswith('base64://')):
+            file = os.path.abspath(file)
+        return VideoSegment(file, cache, proxy, timeout)
+
+    def file(self, file_id: str, file_name: str = '', file_size: int = 0) -> FileSegment:
+        return FileSegment(file_id, file_name, file_size)
 
     def reply(self, message_id: Union[int, str]) -> ReplySegment:
         return ReplySegment(message_id)
@@ -190,6 +214,10 @@ class MessageBuilder:
             return self.face(seg_data.get('id'))
         elif seg_type == 'record':
             return self.record(seg_data.get('file', ''), seg_data.get('magic', False), seg_data.get('cache', True), seg_data.get('proxy', True), seg_data.get('timeout', 30))
+        elif seg_type == 'video':
+            return self.video(seg_data.get('file', ''), seg_data.get('cache', True), seg_data.get('proxy', True), seg_data.get('timeout', 30))
+        elif seg_type == 'file':
+            return self.file(seg_data.get('file_id', ''), seg_data.get('file_name', ''), seg_data.get('file_size', 0))
         elif seg_type == 'reply':
             return self.reply(seg_data.get('id'))
         return None
