@@ -82,8 +82,12 @@ class FileSegment(BaseSegment):
         return self.data.get('file_id', '')
 
 class ReplySegment(BaseSegment):
-    def __init__(self, message_id: Union[int, str]):
-        super().__init__('reply', {'id': str(message_id)})
+    def __init__(self, message_id: Union[int, str], quoted_segments: Optional[List] = None):
+        data = {'id': str(message_id)}
+        if quoted_segments:
+            # Milky 协议 reply 段自带被引用消息内容（segments），随事件透传
+            data['quoted_segments'] = quoted_segments
+        super().__init__('reply', data)
     
     @property
     def id(self) -> str:
@@ -151,8 +155,8 @@ class MessageBuilder:
     def file(self, file_id: str, file_name: str = '', file_size: int = 0) -> FileSegment:
         return FileSegment(file_id, file_name, file_size)
 
-    def reply(self, message_id: Union[int, str]) -> ReplySegment:
-        return ReplySegment(message_id)
+    def reply(self, message_id: Union[int, str], quoted_segments: Optional[List] = None) -> ReplySegment:
+        return ReplySegment(message_id, quoted_segments)
 
     def forward_node(self, user_id: int, nickname: str, content: Union[str, List[Union[BaseSegment, Dict]]]) -> ForwardNodeSegment:
         if isinstance(content, str):
@@ -219,7 +223,7 @@ class MessageBuilder:
         elif seg_type == 'file':
             return self.file(seg_data.get('file_id', ''), seg_data.get('file_name', ''), seg_data.get('file_size', 0))
         elif seg_type == 'reply':
-            return self.reply(seg_data.get('id'))
+            return self.reply(seg_data.get('id'), seg_data.get('quoted_segments'))
         return None
 
     def gen_message(self, data: Union[Dict, List]) -> List[BaseSegment]:
