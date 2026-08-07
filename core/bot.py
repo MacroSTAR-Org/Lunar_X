@@ -315,7 +315,7 @@ class LunarBot:
             success = await self.plugin_manager.reload_plugins()
             
             if success:
-                response = f"外部插件后端重载已完成！\n发送 {self.config.get("trigger_keyword")}帮助 来知道更多！"
+                response = f"外部插件后端重载已完成！\n发送 {self.config.get('trigger_keyword')}帮助 来知道更多！"
                 self.plugins = self.plugin_manager.plugins
             else:
                 response = "插件重载失败"

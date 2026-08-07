@@ -89,8 +89,10 @@ def add_no_cache(response):
 
 @app.before_request
 def require_login():
-    """除登录页/登录接口外，所有页面与 API 均需登录"""
+    """除登录页/登录接口/静态资源外，所有页面与 API 均需登录"""
     if request.path == '/login' or request.path == '/api/login' or request.path == '/api/auth_status':
+        return None
+    if request.path.startswith('/static/'):
         return None
     if session.get('logged_in'):
         return None
@@ -278,10 +280,10 @@ def _dir_size(path):
 
 
 def _find_bot_process():
-    """查找 Lunar X 主进程（python main.py）。
+    """查找 Lunar X 主进程（python main.py），跨平台。
 
     Windows venv 的 python.exe 是启动器（会再拉起真解释器），
-    优先返回非 venv 路径的真身，避免读到启动器的空数据。
+    优先返回非 venv 路径的真身；Linux 的 venv/bin/python 即解释器本身。
     """
     candidates = []
     try:
@@ -296,11 +298,14 @@ def _find_bot_process():
         pass
     if not candidates:
         return None
-    # 非 venv 启动器的优先（真解释器进程）
+    # 排除 venv 启动器（Windows）与诊断脚本（-c），Linux venv 无双进程问题
     for proc in candidates:
         cl = ' '.join(proc.info.get('cmdline') or [])
-        if '.venv' not in cl and '\\venv\\' not in cl:
-            return proc
+        if '-c' in cl:
+            continue
+        if os.name == 'nt' and ('.venv' in cl or '\\venv\\' in cl):
+            continue
+        return proc
     return candidates[0]
 
 
@@ -339,7 +344,7 @@ def _check_qq_online():
         headers = {'Content-Type': 'application/json'}
         if token:
             headers['Authorization'] = f'Bearer {token}'
-        resp = requests.post(f"{server}/api/get_login_info", json={}, headers=headers, timeout=4)
+        resp = requests.post(f"{server}/api/get_login_info", json={}, headers=headers, timeout=2)
         if resp.status_code == 200:
             data = resp.json()
             if data.get('status') == 'ok':
@@ -397,6 +402,13 @@ def restart_bot():
     try:
         base_dir = os.path.dirname(os.path.abspath(__file__))
         main_py = os.path.join(base_dir, 'main.py')
+
+        # Linux + systemd：走服务管理器重启，避免绕过 systemd 造成双实例竞争
+        if os.name != 'nt' and shutil.which('systemctl'):
+            subprocess.Popen(['systemctl', 'restart', 'lunarx'],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            app.logger.info("机器人重启中（systemctl restart lunarx）")
+            return jsonify({'message': '机器人重启中（systemd），请稍候约 5 秒'})
 
         # 1. 终止现有 bot 进程（启动器 + 真解释器）
         killed = []
