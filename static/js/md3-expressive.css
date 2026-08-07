@@ -329,12 +329,14 @@ body[data-theme="white"] .el-card.is-always-shadow {
   user-select: none;
 }
 .nav-item:hover {
+  background: rgba(128, 128, 128, 0.12);
   background: color-mix(in srgb, var(--el-color-primary) 10%, transparent);
   color: var(--md3e-on-surface);
 }
 .nav-item.active {
   background: var(--el-color-primary);
   color: var(--md3e-on-primary);
+  box-shadow: 0 2px 8px rgba(128, 128, 128, 0.35);
   box-shadow: 0 2px 8px color-mix(in srgb, var(--el-color-primary) 40%, transparent);
 }
 .nav-item .el-icon {
@@ -366,6 +368,7 @@ body[data-theme="white"] .el-card.is-always-shadow {
   transition: background .15s ease;
 }
 .user-chip:hover {
+  background: rgba(128, 128, 128, 0.12);
   background: color-mix(in srgb, var(--el-color-primary) 10%, transparent);
 }
 .user-avatar {
@@ -563,6 +566,20 @@ body[data-theme="white"] .el-card.is-always-shadow {
 .login-brand {
   text-align: center;
   margin-bottom: 28px;
+}
+.login-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--el-color-primary), rgba(255, 255, 255, 0.35));
+  color: var(--md3e-on-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30px;
+  font-weight: 800;
+  margin: 0 auto 18px;
+  box-shadow: 0 4px 14px rgba(128, 128, 128, 0.4);
 }
 .login-brand h1 {
   margin: 0;
