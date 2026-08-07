@@ -1,0 +1,7 @@
+# Lunar X 运行时依赖（Linux 部署用，按 core/ plugins/ webui.py 实际 import 精简）
+# 完整 requirements.txt 含 Windows/桌面专用包（pywin32/PySide6/PyAudio 等），Linux 不适用
+flask==3.1.2
+aiohttp==3.12.15
+websockets==15.0.1
+psutil==7.0.0
+requests==2.32.5
