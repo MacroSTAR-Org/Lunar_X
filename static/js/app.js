@@ -238,6 +238,11 @@ async function boot() {
 
     const app = Vue.createApp(App);
     app.use(ElementPlus);
+    // 工具函数注册到 globalProperties：Vue 3 模板只能访问实例属性/globalProperties/内置白名单，
+    // window 上的全局函数在模板表达式里解析不到（渲染代理 has 拦截阻止全局回退）
+    app.config.globalProperties.fmtBytes = fmtBytes;
+    app.config.globalProperties.fmtDuration = fmtDuration;
+    app.config.globalProperties.fmtTime = fmtTime;
     // 全局注册 Element Plus 图标
     for (const [name, comp] of Object.entries(ElementPlusIconsVue)) {
         app.component(name, comp);
