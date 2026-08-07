@@ -6,7 +6,16 @@
   <title>登录 · Lunar X 控制面板</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/static/vendor/element-plus.css">
+  <link rel="stylesheet" href="/static/vendor/element-plus-dark.css">
   <link rel="stylesheet" href="/static/js/md3-expressive.css">
+  <script>
+    // 主题跟随主界面（localStorage 记忆），深色主题同步 html.dark
+    (function () {
+      var t = localStorage.getItem('lunarx_theme') || 'pink';
+      document.body.dataset.theme = t;
+      if (t !== 'white') document.documentElement.classList.add('dark');
+    })();
+  </script>
 </head>
 <body data-theme="pink">
   <div id="login-app" class="login-page">
@@ -16,28 +25,40 @@
         <p>控制面板</p>
       </div>
       <div style="text-align:center;color:#888;padding:24px 0;font-family:sans-serif;">
-        正在加载登录组件…<br><small>若页面长时间无样式/无输入框，请检查网络连接，或使用新版 Chrome / Edge / Safari 访问</small>
+        正在加载登录组件…<br><small>若页面长时间无样式/无输入框，请检查网络连接，或使用新版 Chrome / Edge / Firefox / Safari 访问</small>
       </div>
-    </div>
-  </div>
-      <el-form label-position="top" @submit.prevent>
-        <el-form-item label="用户名">
-          <el-input v-model="username" placeholder="用户名" autocomplete="username" autofocus />
-        </el-form-item>
-        <el-form-item label="密码">
-          <el-input v-model="password" type="password" show-password placeholder="密码"
-                    autocomplete="current-password" @keyup.enter="doLogin" />
-        </el-form-item>
-        <el-button type="primary" style="width: 100%; height: 44px; font-size: 15px;"
-                   :loading="loading" @click="doLogin">登 录</el-button>
-      </el-form>
-      <div class="login-tip">默认账号 lunarx · 默认密码 lunarx</div>
     </div>
   </div>
   <script src="/static/vendor/vue.global.prod.js"></script>
   <script src="/static/vendor/element-plus.full.min.js"></script>
+  <script src="/static/vendor/element-plus-icons.iife.min.js"></script>
   <script>
     const app = Vue.createApp({
+      template: `
+      <div class="login-card">
+        <div class="login-brand">
+          <div class="login-logo">L</div>
+          <h1>Lunar X</h1>
+          <p>控制面板</p>
+        </div>
+        <el-form label-position="top" @submit.prevent>
+          <el-form-item label="用户名">
+            <el-input v-model="username" placeholder="用户名" autocomplete="username" autofocus>
+              <template #prefix><el-icon><User /></el-icon></template>
+            </el-input>
+          </el-form-item>
+          <el-form-item label="密码">
+            <el-input v-model="password" type="password" show-password placeholder="密码"
+                      autocomplete="current-password" @keyup.enter="doLogin">
+              <template #prefix><el-icon><Lock /></el-icon></template>
+            </el-input>
+          </el-form-item>
+          <el-button type="primary" style="width: 100%; height: 46px; font-size: 15px; margin-top: 4px;"
+                     :loading="loading" @click="doLogin">登 录</el-button>
+        </el-form>
+        <div class="login-tip">默认账号 lunarx · 默认密码 lunarx</div>
+      </div>
+      `,
       data() {
         return { username: '', password: '', loading: false };
       },
@@ -69,6 +90,9 @@
       },
     });
     app.use(ElementPlus);
+    for (const [name, comp] of Object.entries(ElementPlusIconsVue)) {
+      app.component(name, comp);
+    }
     app.mount('#login-app');
   </script>
 </body>
