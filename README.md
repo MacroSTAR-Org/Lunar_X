@@ -15,6 +15,8 @@
 >
 >你现在正在查看的是开发预览版本！正式版将于不久之后推出。
 
+## 加入 [Lunar X 先行者计划](https://qm.qq.com/cgi-bin/qm/qr?k=uxFoXR5MU32DgFlNcr66Hdhi2hXyb-qw&jump_from=webapi&authKey=Ov+142qleY2t+gQWr8xo6krv3NXTDg9mY8lNEWHMxgZYHPSfWQFJmo98hZ5N8aS2)
+
 ## 概览
 
 Lunar X 是一个全新的 QQ 机器人框架，以「轻便、高效、超强拓展性」为设计理念。框架采用事件驱动的异步架构（asyncio），将协议层、连接层、插件层完全解耦，开发插件只需关注业务逻辑本身，无需接触底层协议细节。
