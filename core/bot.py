@@ -42,8 +42,63 @@ class LunarBot:
         self.plugin_logger = logger.get_logger('LunarPlugins')
         self.msg = MessageBuilder(self)
         self.diy = DiyAPI(self)
+        # 插件私有配置的 mtime 缓存：{插件名: (config.json 的 mtime, 合并后的配置)}
+        # 有它才能做到 WebUI 改完配置下一条消息就生效，不必重启
+        self._plugin_cfg_cache: Dict[str, Any] = {}
         self._register_native_commands()
-    
+
+    # ------------------------------------------------------------------
+    # 插件私有配置 / 数据目录
+    # ------------------------------------------------------------------
+    @property
+    def _root_dir(self) -> str:
+        """框架根目录（core/ 的上一级），不依赖进程 cwd"""
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def plugin_dir(self, name: str) -> Optional[str]:
+        """插件自己的目录；单文件插件没有目录，返回 None"""
+        from .plugin_config import plugin_dir as _pd
+        return _pd(os.path.join(self._root_dir, 'plugins'), name)
+
+    def plugin_config(self, name: str) -> Dict[str, Any]:
+        """读插件私有配置（plugin.json 的 default 打底 + config.json 覆盖）。
+
+        插件里推荐写 `lunar.plugin_config(__name__)`——框架用
+        `spec_from_file_location(插件名, ...)` 注册模块，所以 `__name__` 就是插件名。
+
+        按 config.json 的 mtime 缓存：文件没动就走缓存，动了就重读。
+        这样 WebUI 保存后下一条消息即可读到新值，无需重启。
+        """
+        from . import plugin_config as pc
+        plugins_root = os.path.join(self._root_dir, 'plugins')
+        d = pc.plugin_dir(plugins_root, name)
+        if not d:
+            return {}
+
+        cfg_path = os.path.join(d, pc.CONFIG_FILE)
+        try:
+            mtime = os.stat(cfg_path).st_mtime
+        except OSError:
+            mtime = 0.0                      # config.json 还没建出来，只用 default
+
+        cached = self._plugin_cfg_cache.get(name)
+        if cached and cached[0] == mtime:
+            return cached[1]
+
+        merged = pc.load_config(plugins_root, name)
+        self._plugin_cfg_cache[name] = (mtime, merged)
+        return merged
+
+    def plugin_data_dir(self, name: str) -> str:
+        """插件的数据目录 <root>/data/<name>/，自动创建。
+
+        统一走这里，插件就不用再各自 dirname 往上数层数——
+        以前 quote.py 数两层、tools/store.py 数三层，插件一挪目录路径就断。
+        """
+        path = os.path.join(self._root_dir, 'data', name)
+        os.makedirs(path, exist_ok=True)
+        return path
+
     async def gen_message(self, data: Union[Dict, List]) -> List[BaseSegment]:
         return self.msg.gen_message(data)
     def _convert_segments_to_dicts(self, data: Union[Dict, List, Any]) -> Union[Dict, List, Any]:

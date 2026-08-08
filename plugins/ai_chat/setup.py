@@ -1,22 +1,15 @@
-# AI 对话插件：OpenAI 兼容接口
-# 触发方式（可叠加）：
-#   $ai <问题> 命令；私聊任意消息直接对话；群聊 @机器人 对话；群聊以人格昵称开头（如 "小月 今天天气"）
-#
-# 配置（config.json 的 "ai" 块，可在 WebUI 中编辑）：
-#   enabled:        是否启用
-#   api_base:       OpenAI 兼容接口地址，如 https://api.deepseek.com/v1
-#   api_key:        API Key（留空时回退使用 config 的 openai_key / deepseek_key）
-#   model:          模型名，如 deepseek-chat / gpt-4o-mini
-#   temperature:    采样温度 (0~2)
-#   max_tokens:     最大生成 token 数
-#   max_history:    每个会话保留的上下文轮数
-#   direct_chat:    是否支持直接对话（私聊任意消息 / 群聊 @机器人）
-#   allow_users:    允许使用的用户 QQ 列表（空 = 全部）
-#   allow_groups:   允许使用的群号列表（空 = 全部）
-#   persona:        人格设置（WebUI「人格设置」页）
-#     enabled:        是否使用名字唤醒（群聊中以唤醒词开头即触发对话）
-#     nicknames:      唤醒词列表（支持多个，如 ["小月", "月月"]）
-#     system_prompt:  人格提示词（优先于 ai.system_prompt）
+# -*- coding: utf-8 -*-
+"""AI 对话插件（OpenAI 兼容接口）
+
+触发方式（可叠加）：
+  · $ai <问题>                命令
+  · 私聊任意消息              需开启「私聊直连」
+  · 群聊 @机器人              需开启「私聊直连」
+  · 群聊以唤醒词开头          如「小月 今天天气」
+
+配置在 WebUI 的「插件管理 → ai_chat → 配置」里改，
+落盘位置是本目录的 config.json，字段说明见 README.md。
+"""
 TRIGGHT_KEYWORD = 'Any'
 PLT_ST = 1
 HELP_MESSAGE = 'AI 对话，用法: $ai <问题>'
@@ -33,7 +26,8 @@ _histories = {}
 
 
 def _cfg(bot):
-    return bot.config.get('ai', {}) or {}
+    # __name__ 就是插件名（框架用 spec_from_file_location(插件名, ...) 注册模块）
+    return bot.plugin_config(__name__)
 
 
 def _session_ref():
@@ -71,20 +65,24 @@ def _history_key(event):
     return f'private:{event.user_id}'
 
 
-def _extract_question(event, args, cfg, nickname=''):
+def _plain_text(bot, event):
+    """取纯文本：event.get_text() 会把 reply 段渲染成 "[回复]"、
+    把 @ 渲染成 "@QQ号"，用它做前缀匹配会误判"""
+    return bot.reply.get_plain_text(event.message).strip()
+
+
+def _extract_question(bot, event, args, cfg, nickname=''):
     if args and args.strip():
         return args.strip()
-    # 去掉 @ 提及前缀
-    text = re.sub(r'@\S+\s*', '', event.get_text())
+    text = _plain_text(bot, event)
     # 昵称前缀剥离（"小月 今天天气" → "今天天气"）
     if nickname:
-        text = text.strip()
         if text.startswith(nickname):
             rest = text[len(nickname):]
             rest = re.sub(r'^[，。,.!！?？:：、;；\s]+', '', rest)
             return rest
     if cfg.get('direct_chat'):
-        return text.strip()
+        return text
     return ''
 
 
@@ -93,7 +91,7 @@ def _persona(cfg):
 
 
 def _persona_nicknames(cfg):
-    """人格唤醒词列表（支持多个，兼容旧的 nickname 单值字段）"""
+    """人格唤醒词列表（兼容旧的 nickname 单值字段）"""
     p = _persona(cfg)
     nicks = p.get('nicknames')
     if isinstance(nicks, list):
@@ -103,11 +101,11 @@ def _persona_nicknames(cfg):
 
 
 async def _ask_ai(bot, cfg, event, question):
-    api_base = cfg.get('api_base', '').rstrip('/')
-    api_key = cfg.get('api_key') or bot.config.get('openai_key') or bot.config.get('deepseek_key')
-    model = cfg.get('model', 'gpt-3.5-turbo')
+    api_base = (cfg.get('api_base') or '').rstrip('/')
+    api_key = cfg.get('api_key')
+    model = cfg.get('model') or 'gpt-3.5-turbo'
     if not api_base or not api_key:
-        return '⚠️ AI 未配置：请在 WebUI「Bot端配置」中填写 AI 接口地址和 Key，并启用 AI 对话'
+        return '⚠️ AI 未配置：请在 WebUI「插件管理 → ai_chat → 配置」里填写接口地址和 Key'
 
     key = _history_key(event)
     history = _histories.get(key)
@@ -166,29 +164,27 @@ async def on_message(event, bot):
     group_id = getattr(event, 'group_id', None)
     is_command = bool(event.is_command and event.command == 'ai')
     direct = cfg.get('direct_chat', False) and (not group_id or _is_mentioning_bot(event))
-    # 名字唤醒：群聊消息以任一唤醒词开头（如 "小月 今天天气"）
-    nicknames = _persona_nicknames(cfg)
+
+    # 名字唤醒：群聊消息以任一唤醒词开头
     matched_nick = ''
-    if nicknames and group_id:
-        text = event.get_text()
-        # 按长度降序匹配，避免短词误匹配长词前缀
-        for nick in sorted(nicknames, key=len, reverse=True):
-            if text.startswith(nick):
-                matched_nick = nick
-                break
+    if group_id and _persona(cfg).get('enabled', True):
+        nicknames = _persona_nicknames(cfg)
+        if nicknames:
+            text = _plain_text(bot, event)
+            # 按长度降序匹配，避免短词吃掉长词
+            for nick in sorted(nicknames, key=len, reverse=True):
+                if text.startswith(nick):
+                    matched_nick = nick
+                    break
 
     if not (is_command or direct or matched_nick):
         return False
 
-    question = _extract_question(event, getattr(event, 'args', ''), cfg, matched_nick)
+    question = _extract_question(bot, event, getattr(event, 'args', ''), cfg, matched_nick)
     if not question:
-        await bot.send('用法: $ai <问题>',
-                       group_id=group_id,
-                       user_id=event.user_id)
+        await bot.send('用法: $ai <问题>', group_id=group_id, user_id=event.user_id)
         return True
 
     reply = await _ask_ai(bot, cfg, event, question)
-    await bot.send(reply,
-                   group_id=group_id,
-                   user_id=event.user_id)
+    await bot.send(reply, group_id=group_id, user_id=event.user_id)
     return True

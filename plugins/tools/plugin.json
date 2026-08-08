@@ -1,0 +1,39 @@
+{
+  "name": "tools",
+  "display_name": "工具箱",
+  "version": "1.0.0",
+  "author": "MacroSTAR",
+  "description": "定时提醒 + 群管理（禁言/踢人/公告）+ 群消息持久化与检索",
+  "config": [
+    {
+      "key": "log_messages",
+      "label": "记录群消息",
+      "type": "bool",
+      "default": true,
+      "hint": "关闭后 $历史消息 和 $群消息统计 将没有新数据"
+    },
+    {
+      "key": "log_groups",
+      "label": "记录范围（群白名单）",
+      "type": "int_list",
+      "default": [],
+      "hint": "留空 = 记录所有群。填了则只记录列表内的群"
+    },
+    {
+      "key": "log_private",
+      "label": "记录私聊消息",
+      "type": "bool",
+      "default": false,
+      "hint": "私聊内容较敏感，默认不记录"
+    },
+    {
+      "key": "search_limit",
+      "label": "历史消息搜索上限",
+      "type": "int",
+      "default": 50,
+      "min": 1,
+      "max": 200,
+      "hint": "$历史消息 单次最多返回多少条"
+    }
+  ]
+}

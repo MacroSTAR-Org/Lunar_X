@@ -1,40 +1,10 @@
 {
-  "ai": {
-    "allow_groups": [],
-    "allow_users": [],
-    "api_base": "https://api.deepseek.com",
-    "api_key": "",
-    "direct_chat": false,
-    "enabled": true,
-    "max_history": 10,
-    "max_tokens": 2048,
-    "model": "deepseek-v4-flash",
-    "system_prompt": "你是 Lunar X 的 AI 助手，请用中文简洁友好地回答问题。",
-    "temperature": 1.2,
-    "persona": {
-      "system_prompt": "你是小月，一个温柔可爱的 AI 助手。你说话亲切、简短，偶尔带一点点俏皮。",
-      "nicknames": [
-        "小月",
-        "月月"
-      ]
-    }
-  },
-  "answer": [
-    114,
-    3803,
-    114514
-  ],
   "auto_reload_plugins": true,
   "bot_name": "Lunar X",
   "bot_name_en": "Lunar X",
-  "bot_qq": 179495819,
-  "deepseek_key": "",
-  "default_mode": "Ds",
-  "gemini_key": "",
   "log_level": "INFO",
   "milky_server": "http://127.0.0.1:3010",
   "milky_token": "",
-  "openai_key": "",
   "protocol": "milky",
   "root_user": 1348472639,
   "token": "114514",

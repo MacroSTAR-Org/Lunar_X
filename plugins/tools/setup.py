@@ -31,9 +31,22 @@ async def on_lunar_event(event, bot):
         asyncio.ensure_future(scheduler.restore(bot))
 
 
+def _should_log(cfg, event):
+    """这条消息要不要入库。以前是无条件全存，现在受配置控制。"""
+    if not cfg.get('log_messages', True):
+        return False
+    group_id = getattr(event, 'group_id', None)
+    if not group_id:
+        return bool(cfg.get('log_private', False))
+    allow = cfg.get('log_groups', [])
+    return (not allow) or (group_id in allow)      # 留空 = 不限制
+
+
 async def on_message(event, bot):
-    # 1. 消息持久化（所有消息入库，不阻断其他插件）
-    if isinstance(event, MessageEvent):
+    cfg = bot.plugin_config(__name__)
+
+    # 1. 消息持久化（不阻断其他插件）
+    if isinstance(event, MessageEvent) and _should_log(cfg, event):
         save_message(event)
 
     if not event.is_command:

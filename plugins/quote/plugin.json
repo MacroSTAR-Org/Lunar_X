@@ -1,0 +1,44 @@
+{
+  "name": "quote",
+  "display_name": "群聊语录",
+  "version": "1.0.0",
+  "author": "MacroSTAR",
+  "description": "收录群友金句，支持分类、随机播放、搜索与删除",
+  "config": [
+    {
+      "key": "max_content_length",
+      "label": "语录最大字数",
+      "type": "int",
+      "default": 200,
+      "min": 10,
+      "max": 2000,
+      "hint": "超过这个长度会拒绝收录"
+    },
+    {
+      "key": "max_category_length",
+      "label": "分类名最大字数",
+      "type": "int",
+      "default": 6,
+      "min": 1,
+      "max": 20,
+      "hint": "「$收录 沙雕 内容」里第一段不超过这个长度才当作分类，否则整句都算内容"
+    },
+    {
+      "key": "list_limit",
+      "label": "列表/搜索返回条数",
+      "type": "int",
+      "default": 20,
+      "min": 1,
+      "max": 100
+    },
+    {
+      "key": "random_pool",
+      "label": "随机抽取池大小",
+      "type": "int",
+      "default": 500,
+      "min": 10,
+      "max": 5000,
+      "hint": "从最近这么多条里随机，越大越不容易重复但查询越慢"
+    }
+  ]
+}

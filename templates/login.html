@@ -9,15 +9,19 @@
   <link rel="stylesheet" href="/static/vendor/element-plus-dark.css">
   <link rel="stylesheet" href="/static/js/md3-expressive.css">
   <script>
-    // 主题跟随主界面（localStorage 记忆），深色主题同步 html.dark
+    // 主题跟随主界面（localStorage 记忆）。旧版三主题取值在这里归一化：
+    // white → light，pink/blue/空 → dark
     (function () {
-      var t = localStorage.getItem('lunarx_theme') || 'pink';
-      document.body.dataset.theme = t;
-      if (t !== 'white') document.documentElement.classList.add('dark');
+      var t = localStorage.getItem('lunarx_theme');
+      if (t !== 'dark' && t !== 'light') t = (t === 'white') ? 'light' : 'dark';
+      document.documentElement.classList.toggle('dark', t === 'dark');
+      document.addEventListener('DOMContentLoaded', function () {
+        document.body.dataset.theme = t;
+      });
     })();
   </script>
 </head>
-<body data-theme="pink">
+<body data-theme="dark">
   <div id="login-app" class="login-page">
     <div class="login-card">
       <div class="login-brand">
@@ -29,6 +33,7 @@
       </div>
     </div>
   </div>
+  <script src="/static/js/bg.js"></script>
   <script src="/static/vendor/vue.global.prod.js"></script>
   <script src="/static/vendor/element-plus.full.min.js"></script>
   <script src="/static/vendor/element-plus-icons.iife.min.js"></script>
@@ -37,7 +42,6 @@
       template: `
       <div class="login-card">
         <div class="login-brand">
-          <div class="login-logo">L</div>
           <h1>Lunar X</h1>
           <p>控制面板</p>
         </div>

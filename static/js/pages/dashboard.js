@@ -1,181 +1,198 @@
-/* 数据看板 */
+/* ============================================================
+ * 数据看板
+ * 9 张指标卡 + 近 7 天消息趋势图，10 秒轮询
+ *
+ * 后端 /api/dashboard 的 system / bot 两组键在异常时会整组消失，
+ * 所以统一走 computed 兜底，模板里不直接点多层属性。
+ * ============================================================ */
 window.Pages = window.Pages || {};
+
 window.Pages.Dashboard = {
-    name: 'DashboardPage',
-    template: `
-    <div>
-      <h2 class="page-title">数据看板</h2>
-      <p class="page-sub">框架、协议端与服务器的实时运行状态（每 10 秒自动刷新）</p>
+  name: 'DashboardPage',
+  template: `
+  <div>
+    <div class="stat-grid">
+      <el-card shadow="never" class="stat-card" :class="{ 'stat-accent': qq.online }">
+        <div class="stat-label">QQ 在线状态</div>
+        <div class="stat-value">
+          <span class="dot" :class="qq.online ? 'on' : 'off'"></span>{{ qq.online ? '在线' : '离线' }}
+        </div>
+        <div class="stat-sub">{{ qq.detail || '加载中...' }}</div>
+      </el-card>
 
-      <div class="stat-grid">
-        <el-card class="stat-card" shadow="never">
-          <div class="stat-label">QQ 在线状态</div>
-          <div class="stat-value" :class="{'stat-accent': d.qq && d.qq.online}">
-            {{ d.qq && d.qq.online ? '在线' : '离线' }}
-          </div>
-          <div class="stat-sub">{{ (d.qq && d.qq.detail) || '加载中...' }}</div>
-        </el-card>
+      <el-card shadow="never" class="stat-card" :class="{ 'stat-accent': bot.running }">
+        <div class="stat-label">Bot 进程</div>
+        <div class="stat-value">
+          <span class="dot" :class="bot.running ? 'on' : 'off'"></span>{{ bot.running ? '运行中' : '未运行' }}
+        </div>
+        <div class="stat-sub" v-if="bot.running">PID {{ bot.pid }} · 已运行 {{ fmtDuration(bot.uptime) }}</div>
+        <div class="stat-sub" v-else>Lunar X 主进程未启动</div>
+      </el-card>
 
-        <el-card class="stat-card" shadow="never">
-          <div class="stat-label">Bot 进程</div>
-          <div class="stat-value" :class="{'stat-accent': d.bot && d.bot.running}">
-            {{ d.bot && d.bot.running ? '运行中' : '未运行' }}
-          </div>
-          <div class="stat-sub">
-            <template v-if="d.bot && d.bot.running">PID {{ d.bot.pid }} · 已运行 {{ fmtDuration(d.bot.uptime) }}</template>
-            <template v-else>Lunar X 主进程未启动</template>
-          </div>
-        </el-card>
+      <el-card shadow="never" class="stat-card" :class="{ 'stat-danger': cpuHot }">
+        <div class="stat-label">系统 CPU 占用</div>
+        <div class="stat-value">{{ sys.cpu_percent != null ? sys.cpu_percent.toFixed(1) + '%' : '-' }}</div>
+        <div class="stat-sub">实时采样</div>
+      </el-card>
 
-        <el-card class="stat-card" shadow="never">
-          <div class="stat-label">系统 CPU 占用</div>
-          <div class="stat-value" :style="cpuHot ? 'color:#ff7b72' : ''">
-            {{ sys.cpu_percent != null ? sys.cpu_percent.toFixed(1) + '%' : '-' }}
-          </div>
-          <div class="stat-sub">实时采样</div>
-        </el-card>
+      <el-card shadow="never" class="stat-card">
+        <div class="stat-label">系统内存占用</div>
+        <div class="stat-value">{{ sys.memory_percent != null ? sys.memory_percent.toFixed(1) + '%' : '-' }}</div>
+        <div class="stat-sub">{{ fmtBytes(sys.memory_used) }} / {{ fmtBytes(sys.memory_total) }}</div>
+      </el-card>
 
-        <el-card class="stat-card" shadow="never">
-          <div class="stat-label">系统内存占用</div>
-          <div class="stat-value">{{ sys.memory_percent != null ? sys.memory_percent.toFixed(1) + '%' : '-' }}</div>
-          <div class="stat-sub">
-            {{ sys.memory_used != null ? fmtBytes(sys.memory_used) + ' / ' + fmtBytes(sys.memory_total) : '' }}
-          </div>
-        </el-card>
+      <el-card shadow="never" class="stat-card">
+        <div class="stat-label">Bot 内存占用</div>
+        <div class="stat-value">{{ fmtBytes(bot.memory_bytes) }}</div>
+        <div class="stat-sub">Lunar X 进程常驻内存</div>
+      </el-card>
 
-        <el-card class="stat-card" shadow="never">
-          <div class="stat-label">Bot 内存占用</div>
-          <div class="stat-value">{{ d.bot && d.bot.memory_bytes ? fmtBytes(d.bot.memory_bytes) : '-' }}</div>
-          <div class="stat-sub">Lunar X 进程常驻内存</div>
-        </el-card>
+      <el-card shadow="never" class="stat-card">
+        <div class="stat-label">Bot CPU（今日）</div>
+        <div class="stat-value">{{ fmtDuration(bot.cpu_seconds_today) }}</div>
+        <div class="stat-sub">累计 {{ fmtDuration(bot.cpu_seconds) }}</div>
+      </el-card>
 
-        <el-card class="stat-card" shadow="never">
-          <div class="stat-label">Bot CPU（今日）</div>
-          <div class="stat-value">
-            {{ d.bot && d.bot.cpu_seconds_today != null ? fmtDuration(d.bot.cpu_seconds_today) : '-' }}
-          </div>
-          <div class="stat-sub">
-            {{ d.bot && d.bot.cpu_seconds != null ? '累计 ' + fmtDuration(d.bot.cpu_seconds) : '' }}
-          </div>
-        </el-card>
+      <el-card shadow="never" class="stat-card">
+        <div class="stat-label">数据占用量</div>
+        <div class="stat-value">{{ fmtBytes(storage.total) }}</div>
+        <div class="stat-sub" v-if="storage.dirs">
+          core {{ fmtBytes(storage.dirs.core) }} · plugins {{ fmtBytes(storage.dirs.plugins) }} · uploads {{ fmtBytes(storage.dirs.uploads) }}
+        </div>
+      </el-card>
 
-        <el-card class="stat-card" shadow="never">
-          <div class="stat-label">数据占用量</div>
-          <div class="stat-value">{{ d.storage ? fmtBytes(d.storage.total) : '-' }}</div>
-          <div class="stat-sub" v-if="d.storage">
-            core: {{ fmtBytes(d.storage.dirs.core) }} · plugins: {{ fmtBytes(d.storage.dirs.plugins) }}
-            · uploads: {{ fmtBytes(d.storage.dirs.uploads) }}
-          </div>
-        </el-card>
+      <el-card shadow="never" class="stat-card" :class="{ 'stat-danger': diskHot }">
+        <div class="stat-label">系统磁盘占用</div>
+        <div class="stat-value">{{ sys.disk_percent != null ? sys.disk_percent.toFixed(1) + '%' : '-' }}</div>
+        <div class="stat-sub">{{ fmtBytes(sys.disk_used) }} / {{ fmtBytes(sys.disk_total) }}</div>
+      </el-card>
 
-        <el-card class="stat-card" shadow="never">
-          <div class="stat-label">系统磁盘占用</div>
-          <div class="stat-value" :style="diskHot ? 'color:#ff7b72' : ''">
-            {{ sys.disk_percent != null ? sys.disk_percent.toFixed(1) + '%' : '-' }}
-          </div>
-          <div class="stat-sub">
-            {{ sys.disk_used != null ? fmtBytes(sys.disk_used) + ' / ' + fmtBytes(sys.disk_total) : '' }}
-          </div>
-        </el-card>
-
-        <el-card class="stat-card" shadow="never">
-          <div class="stat-label">7 天消息总数</div>
-          <div class="stat-value stat-accent">{{ d.messages ? d.messages.total_7d : '-' }}</div>
-          <div class="stat-sub">
-            接收 + 发送
-            <template v-if="sys.boot_time"> · 开机 {{ fmtTime(sys.boot_time) }}</template>
-          </div>
-        </el-card>
-      </div>
-
-      <el-card shadow="never" style="margin-top: 16px;">
-        <template #header>近 7 天消息趋势</template>
-        <div ref="chartEl" class="chart-box"></div>
+      <el-card shadow="never" class="stat-card stat-accent">
+        <div class="stat-label">7 天消息总数</div>
+        <div class="stat-value">{{ messages.total_7d != null ? messages.total_7d : '-' }}</div>
+        <div class="stat-sub">
+          接收 + 发送<template v-if="sys.boot_time"> · 开机 {{ fmtTime(sys.boot_time) }}</template>
+        </div>
       </el-card>
     </div>
-    `,
-    data() {
-        return {
-            d: {},
-            timer: null,
-        };
+
+    <el-card shadow="never">
+      <template #header>近 7 天消息趋势</template>
+      <div ref="chartEl" class="chart-box"></div>
+    </el-card>
+  </div>
+  `,
+
+  data() {
+    return { d: {}, timer: null, chart: null };
+  },
+
+  computed: {
+    sys() { return this.d.system || {}; },
+    bot() { return this.d.bot || {}; },
+    qq() { return this.d.qq || {}; },
+    storage() { return this.d.storage || {}; },
+    messages() { return this.d.messages || {}; },
+    cpuHot() { return this.sys.cpu_percent > 80; },
+    diskHot() { return this.sys.disk_percent > 85; },
+  },
+
+  mounted() {
+    try {
+      this.chart = echarts.init(this.$refs.chartEl);
+    } catch (e) { /* ECharts 初始化失败时看板其余部分仍可用 */ }
+
+    this.load();
+    this.timer = setInterval(this.load, 10000);
+    window.addEventListener('resize', this.onResize);
+    // 明暗切换后立即重绘，不必等下一次 10 秒轮询
+    window.addEventListener('lunarx-theme-change', this.renderChart);
+  },
+
+  beforeUnmount() {
+    clearInterval(this.timer);
+    window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('lunarx-theme-change', this.renderChart);
+    if (this.chart) { this.chart.dispose(); this.chart = null; }
+  },
+
+  methods: {
+    onResize() { if (this.chart) this.chart.resize(); },
+
+    async load() {
+      try {
+        this.d = await Api.get('/api/dashboard');
+        this.renderChart();
+      } catch (e) {
+        // 轮询接口静默失败即可，不刷屏；401 已由 Api 层统一跳转
+      }
     },
-    computed: {
-        sys() { return this.d.system || {}; },
-        cpuHot() { return this.sys.cpu_percent > 80; },
-        diskHot() { return this.sys.disk_percent > 85; },
-    },
-    mounted() {
-        try {
-            this.chart = echarts.init(this.$refs.chartEl);
-        } catch (e) {
-        }
-        window.addEventListener('resize', this.onResize);
-        this.load();
-        this.timer = setInterval(this.load, 10000);
-    },
-    beforeUnmount() {
-        if (this.timer) clearInterval(this.timer);
-        window.removeEventListener('resize', this.onResize);
-        if (this.chart) { this.chart.dispose(); this.chart = null; }
-    },
-    methods: {
-        onResize() { if (this.chart) this.chart.resize(); },
-        async load() {
-            try {
-                const resp = await fetch('/api/dashboard', { cache: 'no-store' });
-                if (resp.status === 401) { location.href = '/login'; return; }
-                this.d = await resp.json();
-                this.renderChart();
-            } catch (e) {
-            }
+
+    renderChart() {
+      const days = this.messages.days;
+      if (!this.chart || !days) return;
+
+      // 单色图表：两条柱子靠明度区分（实心白 / 半透明白），
+      // 合计线用虚线，与页面的"线条+点阵"语言一致
+      const isDark = document.body.dataset.theme !== 'light';
+      const fg = isDark ? '#ffffff' : '#000000';
+      const strong = isDark ? 'rgba(255,255,255,.92)' : 'rgba(0,0,0,.88)';
+      const weak = isDark ? 'rgba(255,255,255,.34)' : 'rgba(0,0,0,.28)';
+      const line = isDark ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.12)';
+      const textColor = isDark ? '#9a9a9a' : '#5f5f5f';
+      const surface = isDark ? '#0c0c0c' : '#ffffff';
+
+      this.chart.setOption({
+        backgroundColor: 'transparent',
+        animationDuration: 550,
+        animationEasing: 'cubicOut',
+        textStyle: { fontFamily: 'Segoe UI, PingFang SC, Microsoft YaHei, system-ui, sans-serif' },
+        tooltip: {
+          trigger: 'axis',
+          backgroundColor: surface,
+          borderColor: line,
+          textStyle: { color: isDark ? '#ededed' : '#111111' },
         },
-        renderChart() {
-            if (!this.d.messages || !this.d.messages.days || !this.chart) return;
-            const days = this.d.messages.days;
-            const dates = days.map(x => x.date.slice(5));
-            const received = days.map(x => x.received);
-            const sent = days.map(x => x.sent);
-            const total = days.map(x => x.received + x.sent);
-            const isDark = document.body.dataset.theme !== 'white';
-            const textColor = isDark ? '#a0a1a8' : '#64686f';
-            const primary = getComputedStyle(document.documentElement).getPropertyValue('--el-color-primary').trim() || '#5BC9F3';
-            this.chart.setOption({
-                backgroundColor: 'transparent',
-                tooltip: {
-                    trigger: 'axis',
-                    backgroundColor: isDark ? '#23242c' : '#ffffff',
-                    borderColor: isDark ? '#3a3b44' : '#e2e4e9',
-                    textStyle: { color: isDark ? '#e8e8ea' : '#24262b' },
-                },
-                legend: {
-                    data: ['接收', '发送', '合计'],
-                    textStyle: { color: textColor },
-                    top: 0,
-                },
-                grid: { left: 42, right: 16, top: 36, bottom: 30 },
-                xAxis: {
-                    type: 'category',
-                    data: dates,
-                    axisLine: { lineStyle: { color: isDark ? '#3a3b44' : '#d3d6dd' } },
-                    axisLabel: { color: textColor },
-                },
-                yAxis: {
-                    type: 'value',
-                    minInterval: 1,
-                    splitLine: { lineStyle: { color: isDark ? '#2a2b35' : '#eef0f3', type: 'dashed' } },
-                    axisLabel: { color: textColor },
-                },
-                series: [
-                    { name: '接收', type: 'bar', stack: 'm', data: received, barWidth: '42%',
-                      itemStyle: { color: primary, opacity: 0.85, borderRadius: [6, 6, 0, 0] } },
-                    { name: '发送', type: 'bar', stack: 'm', data: sent, barWidth: '42%',
-                      itemStyle: { color: isDark ? '#9fd8e8' : '#006a86', opacity: 0.65, borderRadius: [6, 6, 0, 0] } },
-                    { name: '合计', type: 'line', data: total, smooth: true, symbolSize: 6,
-                      lineStyle: { width: 2.5, color: primary },
-                      itemStyle: { color: primary } },
-                ],
-            });
+        legend: {
+          data: ['接收', '发送', '合计'], top: 0,
+          textStyle: { color: textColor, fontSize: 11 },
+          itemWidth: 14, itemHeight: 8, itemGap: 18,
         },
+        grid: { left: 42, right: 16, top: 36, bottom: 30 },
+        xAxis: {
+          type: 'category',
+          data: days.map(x => x.date.slice(5)),
+          axisLine: { lineStyle: { color: line } },
+          axisTick: { show: false },
+          axisLabel: { color: textColor, fontSize: 11 },
+        },
+        yAxis: {
+          type: 'value',
+          minInterval: 1,
+          axisLine: { show: false },
+          axisLabel: { color: textColor, fontSize: 11 },
+          splitLine: { lineStyle: { color: line, type: 'dashed' } },
+        },
+        series: [
+          {
+            name: '接收', type: 'bar', stack: 'm', barWidth: '38%',
+            data: days.map(x => x.received),
+            itemStyle: { color: strong, borderRadius: [3, 3, 0, 0] },
+          },
+          {
+            name: '发送', type: 'bar', stack: 'm',
+            data: days.map(x => x.sent),
+            itemStyle: { color: weak, borderRadius: [3, 3, 0, 0] },
+          },
+          {
+            name: '合计', type: 'line', smooth: true,
+            data: days.map(x => (x.received || 0) + (x.sent || 0)),
+            symbol: 'circle', symbolSize: 5,
+            lineStyle: { color: fg, width: 1.4, type: 'dashed' },
+            itemStyle: { color: surface, borderColor: fg, borderWidth: 1.4 },
+          },
+        ],
+      });
     },
+  },
 };

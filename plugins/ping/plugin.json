@@ -1,0 +1,8 @@
+{
+  "name": "ping",
+  "display_name": "连通性测试",
+  "version": "1.0.0",
+  "author": "MacroSTAR",
+  "description": "回复 pong，用于测试机器人是否在线；同时演示消息段映射（@ + 表情）",
+  "config": []
+}

@@ -16,6 +16,10 @@ import sys
 import re
 import psutil
 
+# 与 bot 端共用同一套插件配置读写逻辑，避免两边实现漂移
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from core import plugin_config as pc
+
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['PLUGINS_DIR'] = 'plugins'
@@ -30,6 +34,21 @@ CONFIG_JSON_PATH = os.path.abspath('config.json')
 ADMIN_JSON_PATH = os.path.abspath('admin114.json')
 WEBUI_JSON_PATH = os.path.abspath('webui.json')
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs', 'lunarx.log')
+
+
+_PLUGIN_NAME_RE = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$')
+
+
+def _safe_plugin_name(name: str) -> bool:
+    """插件名白名单校验。
+
+    插件名会被直接拼进文件路径，不校验的话 `..%2f..%2fconfig.json`
+    这类输入能让删除/读写接口跑出 plugins 目录。
+    只允许字母数字下划线点横线，且不能以点开头、不能含路径分隔符。
+    """
+    if not name or not _PLUGIN_NAME_RE.match(name):
+        return False
+    return '..' not in name and '/' not in name and '\\' not in name
 
 
 def load_webui_config():
@@ -80,8 +99,6 @@ def verify_password(password: str, stored: str) -> bool:
 @app.after_request
 def add_no_cache(response):
     """页面/API 不缓存，避免浏览器加载旧版 HTML/JS"""
-    if request.path.startswith('/api/logs/stream'):
-        return response
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
     response.headers['Pragma'] = 'no-cache'
     return response
@@ -514,50 +531,106 @@ def get_dashboard():
 
     return jsonify(data)
 
+# 日志读取统一用二进制 + 字节偏移量。
+# 不能用文本模式的 seek(字节数)：文本流的 seek 只接受 tell() 返回的不透明游标，
+# 传字节数在换行转换（Windows CRLF）和多字节 UTF-8 下会错位，导致重复行或乱码。
+LOG_HISTORY_SCAN = 512 * 1024      # 取历史时最多回扫的字节数，避免整文件读进内存
+
+
+def _read_log_tail(max_bytes=LOG_HISTORY_SCAN):
+    """读取日志尾部，返回 (行列表, 文件当前字节大小)。文件不存在返回 (None, 0)。"""
+    try:
+        size = os.path.getsize(LOG_FILE)
+        with open(LOG_FILE, 'rb') as f:
+            start = max(0, size - max_bytes)
+            f.seek(start)
+            data = f.read()
+    except FileNotFoundError:
+        return None, 0
+    if start > 0:
+        # 回扫起点大概率落在某行中间，丢掉这半行
+        nl = data.find(b'\n')
+        data = data[nl + 1:] if nl >= 0 else b''
+    text = data.decode('utf-8', errors='replace')
+    return text.splitlines(), size
+
+
 @app.route('/api/logs', methods=['GET'])
 def get_logs():
-    """获取框架日志历史（最后 N 行）"""
+    """日志历史（最后 N 行）。
+
+    同时返回 offset（当前文件字节大小），客户端应拿它作为 /api/logs/tail 的起点，
+    这样历史与增量之间不会漏行也不会重复。
+    """
     tail = request.args.get('tail', 200, type=int)
     tail = max(1, min(tail, 5000))
     try:
-        with open(LOG_FILE, 'r', encoding='utf-8', errors='replace') as f:
-            lines = f.readlines()
-    except FileNotFoundError:
-        return jsonify({'lines': [], 'exists': False})
+        lines, size = _read_log_tail()
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-    return jsonify({'lines': lines[-tail:], 'exists': True})
+    if lines is None:
+        return jsonify({'lines': [], 'exists': False, 'offset': 0})
+    return jsonify({'lines': lines[-tail:], 'exists': True, 'offset': size})
 
-@app.route('/api/logs/stream')
-def stream_logs():
-    """SSE 实时推送框架日志新行"""
-    def generate():
-        last_size = 0
+
+@app.route('/api/logs/tail', methods=['GET'])
+def tail_logs():
+    """长轮询增量日志。
+
+    取代原先的 SSE 实现，解决三个实时性问题：
+      1. 原来固定 time.sleep(1)，每行最多延迟 1 秒；这里 50ms 探测一次，
+         一有新内容立即返回，端到端延迟约 50ms。
+      2. 原来空闲时不吐任何字节，浏览器要等 15 秒心跳才认为连接建立，
+         界面上会挂着「连接中」；长轮询每轮都会正常收尾，不存在这个空窗。
+      3. 原来 last_size 与实际读到的长度可能不一致，重叠部分会重复推送。
+         这里用「只消费到最后一个换行符」的方式对齐，偏移量由客户端回传。
+
+    参数 offset：上次拿到的字节偏移量；传 -1（或不传）表示只要今后的新内容。
+    返回 {offset, lines, exists, rotated}
+    """
+    try:
+        offset = int(request.args.get('offset', -1))
+    except (TypeError, ValueError):
+        offset = -1
+
+    deadline = time.time() + 20.0      # 单轮最长挂 20 秒，之后空返回让客户端续接
+    interval = 0.05
+
+    while True:
         try:
-            last_size = os.path.getsize(LOG_FILE)
+            size = os.path.getsize(LOG_FILE)
         except OSError:
-            pass
-        heartbeat = 0
-        while True:
-            try:
-                size = os.path.getsize(LOG_FILE)
-                if size < last_size:
-                    # 日志文件轮转，从头开始读
-                    last_size = 0
-                if size > last_size:
-                    with open(LOG_FILE, 'r', encoding='utf-8', errors='replace') as f:
-                        f.seek(last_size)
-                        new_data = f.read()
-                    last_size = size
-                    for line in new_data.splitlines():
-                        yield f"data: {line}\n\n"
-            except Exception:
-                pass
-            heartbeat += 1
-            if heartbeat % 15 == 0:
-                yield ": ping\n\n"
-            time.sleep(1)
-    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+            # 日志文件还没建出来，等它出现
+            if time.time() >= deadline:
+                return jsonify({'offset': 0, 'lines': [], 'exists': False, 'rotated': False})
+            time.sleep(interval)
+            continue
+
+        rotated = False
+        if offset < 0:
+            offset = size          # 首次连接：只要增量，不回放历史
+        elif offset > size:
+            offset, rotated = 0, True   # 文件被轮转/清空，从头再来
+
+        if size > offset:
+            with open(LOG_FILE, 'rb') as f:
+                f.seek(offset)
+                data = f.read(size - offset)
+            cut = data.rfind(b'\n')
+            if cut >= 0:
+                # 只消费完整行，剩下的半行留到下一轮，避免把写了一半的日志推出去
+                consumed = data[:cut + 1]
+                text = consumed.decode('utf-8', errors='replace')
+                return jsonify({
+                    'offset': offset + len(consumed),
+                    'lines': text.splitlines(),
+                    'exists': True,
+                    'rotated': rotated,
+                })
+
+        if time.time() >= deadline:
+            return jsonify({'offset': offset, 'lines': [], 'exists': True, 'rotated': rotated})
+        time.sleep(interval)
 
 @app.route('/api/change_password', methods=['POST'])
 def change_password():
@@ -634,46 +707,125 @@ def update_config(config_type):
         return jsonify({'error': str(e)}), 500
 
 def get_plugins_list():
+    """扫描 plugins/ 目录。
+
+    判定规则与 core/plugin_manager.py 保持一致：
+      · 目录插件必须含 setup.py，否则不算插件（以前任意目录都会被列出来）
+      · 只有 .py 结尾的文件才算单文件插件（以前 xxx.md 会被当成目录插件列出）
+    带 plugin.json 的插件会附上清单信息，供前端渲染配置表单。
+    """
     plugins = []
     plugins_dir = app.config['PLUGINS_DIR']
-    
+
     if not os.path.exists(plugins_dir):
         return []
 
-    for item in os.listdir(plugins_dir):
-        if item == '__pycache__':
+    for item in sorted(os.listdir(plugins_dir)):
+        if item == '__pycache__' or item.startswith('_'):
             continue
-            
+
         item_path = os.path.join(plugins_dir, item)
-        
         is_disabled = item.startswith('d_')
         base_name = item[2:] if is_disabled else item
-        
-        plugin_type = 'directory'
-        if base_name.endswith('.py'):
+
+        if os.path.isdir(item_path):
+            # 目录里没有 setup.py 就不是插件（可能只是资源目录）
+            if not os.path.exists(os.path.join(item_path, 'setup.py')):
+                continue
+            plugin_type = 'directory'
+        elif base_name.endswith('.py'):
             plugin_type = 'file'
             base_name = base_name[:-3]
+        else:
+            continue                      # .md / .txt 等一律不是插件
 
         plugin_info = {
             'name': base_name,
             'full_name': item,
             'enabled': not is_disabled,
-            'type': plugin_type
+            'type': plugin_type,
         }
-        
-        readme_path = None
-        if plugin_info['type'] == 'directory':
-            readme_path = os.path.join(item_path, 'README.md')
-        elif plugin_info['type'] == 'file':
-            readme_path = os.path.join(plugins_dir, f"{plugin_info['name']}.md")
 
-        if readme_path and os.path.exists(readme_path):
-            plugin_info['has_help'] = True
+        if plugin_type == 'directory':
+            readme_path = os.path.join(item_path, 'README.md')
         else:
-            plugin_info['has_help'] = False
-        
+            readme_path = os.path.join(plugins_dir, f'{base_name}.md')
+        plugin_info['has_help'] = bool(readme_path and os.path.exists(readme_path))
+
+        # 清单（可选）：有 config 声明才在前端显示「配置」按钮
+        manifest = pc.load_manifest(plugins_dir, base_name)
+        plugin_info['display_name'] = manifest.get('display_name') or base_name
+        plugin_info['version'] = manifest.get('version') or ''
+        plugin_info['description'] = manifest.get('description') or ''
+        plugin_info['has_config'] = bool(pc.get_schema(manifest))
+
         plugins.append(plugin_info)
     return plugins
+
+
+@app.route('/api/plugins/<plugin_name>/manifest', methods=['GET'])
+def get_plugin_manifest(plugin_name):
+    """插件清单（含配置项 schema），前端据此动态渲染表单"""
+    if not _safe_plugin_name(plugin_name):
+        return jsonify({'error': '非法插件名'}), 400
+    plugins_dir = app.config['PLUGINS_DIR']
+    manifest = pc.load_manifest(plugins_dir, plugin_name)
+    if not manifest:
+        return jsonify({'error': '该插件没有 plugin.json 清单'}), 404
+    return jsonify({
+        'name': manifest.get('name') or plugin_name,
+        'display_name': manifest.get('display_name') or plugin_name,
+        'version': manifest.get('version') or '',
+        'author': manifest.get('author') or '',
+        'description': manifest.get('description') or '',
+        'config': pc.get_schema(manifest),
+    })
+
+
+@app.route('/api/plugins/<plugin_name>/config', methods=['GET'])
+def get_plugin_config(plugin_name):
+    """插件当前配置值（schema 的 default 已合并进来），拍平成 {点号key: 值}"""
+    if not _safe_plugin_name(plugin_name):
+        return jsonify({'error': '非法插件名'}), 400
+    plugins_dir = app.config['PLUGINS_DIR']
+    if not pc.plugin_dir(plugins_dir, plugin_name):
+        return jsonify({'error': '插件不存在或不是目录形态'}), 404
+    schema = pc.get_schema(pc.load_manifest(plugins_dir, plugin_name))
+    merged = pc.load_config(plugins_dir, plugin_name)
+    return jsonify({'values': pc.flatten_for_form(schema, merged)})
+
+
+@app.route('/api/plugins/<plugin_name>/config', methods=['POST'])
+def update_plugin_config(plugin_name):
+    """保存插件配置。
+
+    只接受 schema 里声明过的 key，并按声明的类型校验——
+    否则这个接口等于允许往插件目录里写任意 JSON。
+    """
+    if not _safe_plugin_name(plugin_name):
+        return jsonify({'error': '非法插件名'}), 400
+    plugins_dir = app.config['PLUGINS_DIR']
+    if not pc.plugin_dir(plugins_dir, plugin_name):
+        return jsonify({'error': '插件不存在或不是目录形态'}), 404
+
+    schema = pc.get_schema(pc.load_manifest(plugins_dir, plugin_name))
+    if not schema:
+        return jsonify({'error': '该插件没有声明可配置项'}), 400
+
+    incoming = request.get_json(silent=True) or {}
+    if not isinstance(incoming, dict):
+        return jsonify({'error': '请求体必须是 JSON 对象'}), 400
+
+    existing = pc.load_raw_config(plugins_dir, plugin_name)
+    ok, built, errors = pc.validate_and_build(schema, incoming, existing)
+    if not ok:
+        return jsonify({'error': '；'.join(errors)}), 400
+    try:
+        pc.save_config(plugins_dir, plugin_name, built)
+    except Exception as e:
+        return jsonify({'error': f'保存失败: {e}'}), 500
+    # bot 端按 config.json 的 mtime 缓存，写完下一条消息就会读到新值
+    return jsonify({'message': '配置已保存，立即生效'})
 
 @app.route('/api/plugins', methods=['GET'])
 def get_plugins():
@@ -686,6 +838,8 @@ def get_plugins():
 
 @app.route('/api/plugins/<plugin_name>', methods=['GET'])
 def get_plugin_details(plugin_name):
+    if not _safe_plugin_name(plugin_name):
+        return jsonify({'error': '非法插件名'}), 400
     try:
         plugins_dir = app.config['PLUGINS_DIR']
         
@@ -728,6 +882,8 @@ def get_plugin_details(plugin_name):
 
 @app.route('/api/plugins/<plugin_name>', methods=['PUT'])
 def toggle_plugin(plugin_name):
+    if not _safe_plugin_name(plugin_name):
+        return jsonify({'error': '非法插件名'}), 400
     try:
         plugins_dir = app.config['PLUGINS_DIR']
         
@@ -753,7 +909,9 @@ def toggle_plugin(plugin_name):
             app.logger.info(f"Plugin {plugin_name} disabled")
             return jsonify({'message': 'Plugin disabled successfully'})
         else:
-            original_name = os.path.basename(current_path).replace('d_', '')
+            # 只去掉开头的 d_ 前缀。原来用 replace() 会把名字中间的 d_ 也替换掉，
+            # 比如 d_word_count 会变成 wordcount，插件从此再也找不到
+            original_name = os.path.basename(current_path)[2:]
             original_path = os.path.join(plugins_dir, original_name)
             os.rename(current_path, original_path)
             app.logger.info(f"Plugin {plugin_name} enabled")
@@ -764,6 +922,8 @@ def toggle_plugin(plugin_name):
 
 @app.route('/api/plugins/<plugin_name>', methods=['DELETE'])
 def uninstall_plugin(plugin_name):
+    if not _safe_plugin_name(plugin_name):
+        return jsonify({'error': '非法插件名'}), 400
     try:
         plugins_dir = app.config['PLUGINS_DIR']
         
@@ -892,34 +1052,28 @@ def _process_plugin_structure(plugin_name, extracted_plugin_root_path, log_callb
         shutil.rmtree(nested_dir)
         log_callback(f"嵌套目录 '{nested_dir}' 解包完成。")
 
-    plugin_py_file_in_dir = f"{plugin_name}.py"
-    plugin_py_path_in_dir = os.path.join(extracted_plugin_root_path, plugin_py_file_in_dir)
-    
-    if os.path.exists(plugin_py_path_in_dir):
-        current_contents = os.listdir(extracted_plugin_root_path)
-        
-        significant_contents = [
-            item for item in current_contents 
-            if item != '__pycache__' and item != plugin_py_file_in_dir
-        ]
-        
-        has_other_py_files = any(f.endswith('.py') for f in significant_contents)
-        has_subdirectories = any(os.path.isdir(os.path.join(extracted_plugin_root_path, d)) for d in significant_contents)
+    # 统一成"每个插件一个文件夹、入口是 setup.py"。
+    #
+    # 旧实现在这里做的是反向操作：如果目录里只有一个 <name>.py，就把它拽到
+    # plugins/ 根目录、README.md 改名成 <name>.md、再把文件夹删掉。那会让插件
+    # 失去自己的 plugin.json / config.json，与现在的私有配置机制直接冲突，
+    # 所以改成保留文件夹形态，并把老式入口补齐为 setup.py。
+    setup_path = os.path.join(extracted_plugin_root_path, 'setup.py')
+    legacy_entry = os.path.join(extracted_plugin_root_path, f"{plugin_name}.py")
 
-        if not has_other_py_files and not has_subdirectories:
-            log_callback(f"检测到单文件插件 '{plugin_name}.py'，正在将其移动到插件根目录并处理README。")
-            
-            shutil.move(plugin_py_path_in_dir, os.path.join(plugins_dir, f"{plugin_name}.py"))
-            
-            readme_path_in_dir = os.path.join(extracted_plugin_root_path, 'README.md')
-            if os.path.exists(readme_path_in_dir):
-                shutil.move(readme_path_in_dir, os.path.join(plugins_dir, f"{plugin_name}.md"))
-                log_callback(f"重命名并移动 'README.md' 到 '{plugins_dir}/{plugin_name}.md'。")
-            
-            shutil.rmtree(extracted_plugin_root_path)
-            log_callback(f"删除空目录 '{extracted_plugin_root_path}'。")
-            
-            return
+    if not os.path.exists(setup_path):
+        if os.path.exists(legacy_entry):
+            shutil.move(legacy_entry, setup_path)
+            log_callback(f"已将旧式入口 '{plugin_name}.py' 重命名为 'setup.py'（目录插件的入口约定）。")
+        else:
+            # 没有 setup.py 也没有同名 .py，退而求其次找唯一的顶层 .py 当入口
+            py_files = [f for f in os.listdir(extracted_plugin_root_path)
+                        if f.endswith('.py') and f != '__init__.py']
+            if len(py_files) == 1:
+                shutil.move(os.path.join(extracted_plugin_root_path, py_files[0]), setup_path)
+                log_callback(f"已将唯一入口 '{py_files[0]}' 重命名为 'setup.py'。")
+            else:
+                log_callback(f"⚠️ 未找到 setup.py，插件可能无法被加载（目录插件入口必须叫 setup.py）。")
 
 @app.route('/api/plugins', methods=['POST'])
 def install_plugin():
@@ -1029,7 +1183,8 @@ def install_plugin():
                         yield f"data: INSTALL_FAILED\n\n"
                         return
                     
-                    os.remove(requirements_path) 
+                    # 保留 requirements.txt：它是插件的一部分，删掉之后
+                    # 插件更新或换环境时就没法重新装依赖了
                     yield from log_progress(f"插件 {plugin_name} 的依赖安装成功。")
                 else:
                     yield from log_progress(f"插件 {plugin_name} (目录插件) 没有找到 requirements.txt，跳过依赖安装。")

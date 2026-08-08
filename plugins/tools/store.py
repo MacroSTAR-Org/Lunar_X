@@ -5,9 +5,14 @@ import sqlite3
 import time
 from datetime import datetime
 
-# 数据库路径：Lunar_X/data/tools.db
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'data')
+# 数据库路径：Lunar_X/data/tools/tools.db
+# 与 bot.plugin_data_dir('tools') 指向同一处；用具名中间变量而不是
+# 嵌三层 dirname，插件目录层级变了也一眼看得出该改哪里
+_PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))            # plugins/tools
+_FRAMEWORK_ROOT = os.path.dirname(os.path.dirname(_PLUGIN_DIR))     # Lunar_X
+DATA_DIR = os.path.join(_FRAMEWORK_ROOT, 'data', 'tools')
 DB_PATH = os.path.join(DATA_DIR, 'tools.db')
+_LEGACY_DB = os.path.join(_FRAMEWORK_ROOT, 'data', 'tools.db')      # 旧位置
 
 _conn = None
 
@@ -16,7 +21,11 @@ def get_conn():
     global _conn
     if _conn is None:
         os.makedirs(DATA_DIR, exist_ok=True)
-        _conn = sqlite3.connect(DB_PATH)
+        # 一次性迁移：把旧的 data/tools.db 搬进 data/tools/
+        if not os.path.exists(DB_PATH) and os.path.exists(_LEGACY_DB):
+            import shutil
+            shutil.move(_LEGACY_DB, DB_PATH)
+        _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         _conn.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -43,35 +43,64 @@ class PluginManager:
         else:
             logger.info("文件监控线程未运行或已停止", logger_name='LunarPlugins')
 
-    def initialize_file_timestamps(self):
-        self.file_timestamps.clear()
-        for item in os.listdir(self.plugins_dir):
-            item_path = os.path.join(self.plugins_dir, item)
-            if item.endswith('.py') and not item.startswith('_') and os.path.isfile(item_path):
+    # 需要纳入热重载监控的文件：插件代码 + 私有配置
+    _WATCH_SUFFIXES = ('.py', '.json')
+
+    def _scan_watch_files(self) -> Dict[str, float]:
+        """递归扫描 plugins/ 下所有需要监控的文件及其 mtime。
+
+        必须递归：插件全部文件夹化之后，只看顶层 .py 等于没有热重载。
+        同时纳入 .json，这样在 WebUI 里改插件配置也能触发重载。
+        """
+        found: Dict[str, float] = {}
+        for root, dirs, files in os.walk(self.plugins_dir):
+            # 不进 __pycache__ 之类的目录
+            dirs[:] = [d for d in dirs if not d.startswith('_') and d != '__pycache__']
+            for fn in files:
+                # 只跳过 dunder（__init__.py 之类），插件自己的 _helpers.py
+                # 这种私有模块也要监控，否则改了不会触发重载
+                if not fn.endswith(self._WATCH_SUFFIXES) or fn.startswith('__'):
+                    continue
+                path = os.path.join(root, fn)
                 try:
-                    self.file_timestamps[item_path] = os.stat(item_path).st_mtime
-                except Exception as e:
-                    logger.error(f"无法获取文件 {item_path} 的时间戳: {e}", logger_name='LunarPlugins')
+                    found[path] = os.stat(path).st_mtime
+                except OSError:
+                    continue                  # 扫描过程中被删掉，忽略
+        return found
+
+    def initialize_file_timestamps(self):
+        self.file_timestamps = self._scan_watch_files()
 
     def monitor_plugin_files(self):
         while self.monitoring_enabled:
             time.sleep(1)
-            for item in os.listdir(self.plugins_dir):
-                item_path = os.path.join(self.plugins_dir, item)
-                if item.endswith('.py') and not item.startswith('_') and os.path.isfile(item_path):
-                    try:
-                        current_timestamp = os.stat(item_path).st_mtime
-                        if item_path in self.file_timestamps and current_timestamp != self.file_timestamps[item_path]:
-                            logger.info(f"检测到文件更改: {item_path}, 准备重载插件", logger_name='LunarPlugins')
-                            if self.main_loop and self.main_loop.is_running():
-                                asyncio.run_coroutine_threadsafe(self.reload_plugins(), self.main_loop)
-                            else:
-                                logger.error("主事件循环未运行或未设置，无法重载插件。请确保 PluginManager 在主循环启动后初始化。", logger_name='LunarPlugins')
-                            self.initialize_file_timestamps()
-                            break
-                    except Exception as e:
-                        logger.error(f"监控文件 {item_path} 时发生错误: {e}", logger_name='LunarPlugins')
-    
+            try:
+                current = self._scan_watch_files()
+            except Exception as e:
+                logger.error(f"扫描插件目录时发生错误: {e}", logger_name='LunarPlugins')
+                continue
+
+            # 新增 / 删除 / 修改 都要触发重载。
+            # 旧实现只比较已知文件的 mtime，新增插件和重命名（启用/禁用）都捕获不到。
+            added = current.keys() - self.file_timestamps.keys()
+            removed = self.file_timestamps.keys() - current.keys()
+            changed = {p for p in current.keys() & self.file_timestamps.keys()
+                       if current[p] != self.file_timestamps[p]}
+
+            if not (added or removed or changed):
+                continue
+
+            sample = next(iter(changed or added or removed))
+            reason = '修改' if changed else ('新增' if added else '删除')
+            logger.info(f"检测到插件文件{reason}: {sample}，准备重载插件", logger_name='LunarPlugins')
+
+            self.file_timestamps = current    # 先更新，避免重载期间重复触发
+            if self.main_loop and self.main_loop.is_running():
+                asyncio.run_coroutine_threadsafe(self.reload_plugins(), self.main_loop)
+            else:
+                logger.error("主事件循环未运行或未设置，无法重载插件。", logger_name='LunarPlugins')
+
+
     def load_plugins(self):
         logger.info("开始加载插件...", logger_name='LunarPlugins')
         
@@ -108,6 +137,8 @@ class PluginManager:
                     logger.warning(f"目录插件 {item} 缺少 setup.py 文件，跳过加载", logger_name='LunarPlugins')
         
         for name, path, plugin_type in plugin_candidates_to_load:
+            plugin_dir = os.path.dirname(path) if plugin_type == 'dir' else None
+            path_inserted = False
             try:
                 if name in sys.modules:
                     del sys.modules[name]
@@ -115,11 +146,13 @@ class PluginManager:
                     if module_name == name or re.match(rf"^{re.escape(name)}\..*", module_name):
                         del sys.modules[module_name]
 
-                if plugin_type == 'dir':
-                    plugin_dir = os.path.dirname(path)
-                    if plugin_dir not in sys.path:
-                        sys.path.insert(0, plugin_dir)
-                
+                if plugin_dir:
+                    # 只在本插件 exec 期间把它的目录挂到 sys.path，
+                    # 结束后立刻摘掉：既避免路径无限堆积，也让不同插件里
+                    # 的同名子模块（比如各自的 store.py）不会互相串
+                    sys.path.insert(0, plugin_dir)
+                    path_inserted = True
+
                 spec = importlib.util.spec_from_file_location(name, path)
                 if spec is None:
                     error_msg = f"无法为 {name} 创建模块规范"
@@ -127,10 +160,18 @@ class PluginManager:
                     logger.warning(f"插件 {name} {error_msg}，跳过加载", logger_name='LunarPlugins')
                     continue
 
+                modules_before = set(sys.modules)
                 module = importlib.util.module_from_spec(spec)
                 sys.modules[name] = module
                 spec.loader.exec_module(module)
-                
+                # 记下这次 exec 期间新产生、且文件位于本插件目录内的子模块。
+                # 它们已经被插件代码绑定到自己的命名空间了，从 sys.modules 摘掉
+                # 不影响运行，却能让下次重载真正拿到新代码（旧实现清不掉这些
+                # 裸名模块，改了 store.py 重载后跑的还是老的）。
+                owned = self._collect_owned_submodules(modules_before, plugin_dir, name)
+                for sub in owned:
+                    sys.modules.pop(sub, None)
+
                 if not hasattr(module, 'TRIGGHT_KEYWORD'):
                     error_msg = "缺少 TRIGGHT_KEYWORD 属性"
                     self.failed_plugins[name] = error_msg
@@ -160,9 +201,39 @@ class PluginManager:
                 error_msg = str(e)
                 self.failed_plugins[name] = error_msg
                 logger.error(f"加载插件 {name} 时发生错误: {e}", logger_name='LunarPlugins')
-        
+                import traceback
+                logger.debug(f"插件 {name} 加载失败详情:\n{traceback.format_exc()}", logger_name='LunarPlugins')
+            finally:
+                if path_inserted:
+                    try:
+                        sys.path.remove(plugin_dir)
+                    except ValueError:
+                        pass
+
         self._sort_plugins_by_priority()
         logger.info(f"共加载 {len(self.plugins)} 个插件, 失败 {len(self.failed_plugins)} 个", logger_name='LunarPlugins')
+
+    @staticmethod
+    def _collect_owned_submodules(modules_before: set, plugin_dir: str, plugin_name: str) -> List[str]:
+        """挑出本次 exec 新增的、且源文件位于该插件目录内的模块名"""
+        if not plugin_dir:
+            return []
+        owned = []
+        plugin_dir_abs = os.path.abspath(plugin_dir)
+        for mod_name in set(sys.modules) - modules_before:
+            if mod_name == plugin_name:
+                continue
+            mod = sys.modules.get(mod_name)
+            mod_file = getattr(mod, '__file__', None)
+            if not mod_file:
+                continue
+            try:
+                if os.path.commonpath([os.path.abspath(mod_file), plugin_dir_abs]) == plugin_dir_abs:
+                    owned.append(mod_name)
+            except ValueError:
+                continue                 # 不同盘符，commonpath 会抛
+        return owned
+
     def _sort_plugins_by_priority(self):
         sorted_plugins = sorted(self.plugins.items(), key=lambda x: x[1]['priority'])
         self.plugins = dict(sorted_plugins)

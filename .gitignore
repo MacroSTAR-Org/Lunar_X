@@ -12,7 +12,12 @@ data/
 restart_info.json
 
 # 本地配置（含密钥，勿提交）
+# webui.json 是运行时状态：面板账号密码哈希 + 会话签名密钥，
+# 首次启动 webui.py 会自动生成，绝不能进仓库
+webui.json
 webui.json.local
+# 插件私有配置，常含 API Key；缺失时框架会用 plugin.json 的 default 兜底
+plugins/*/config.json
 
 # 编辑器/系统
 .vscode/
