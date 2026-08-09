@@ -1,5 +1,4 @@
-# Lunar X 完整依赖（Linux 版）：原 requirements.txt 移除 Windows/桌面专用包
-# 含传递依赖锁定。若只需运行框架，用精简版 requirements-linux.txt 即可
+# Linux 完整包（专属）
 aiohappyeyeballs==2.6.1
 aiohttp==3.12.15
 aiosignal==1.4.0

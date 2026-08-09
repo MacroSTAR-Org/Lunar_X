@@ -1,3 +1,4 @@
+# 仅供Windows用户安装，Linux用户请看./requirements-full-linux.txt 或 ./requirements-linux.txt
 aiohappyeyeballs==2.6.1
 aiohttp==3.12.15
 aiosignal==1.4.0
