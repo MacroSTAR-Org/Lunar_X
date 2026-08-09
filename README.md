@@ -69,7 +69,9 @@ Contributors：
 
 [后藤一里](https://github.com/houtengyiliawa)
 
-![](https://contrib.rocks/image?repo=MacroSTAR-MS/Lunar_X)
+<a href="https://github.com/MacroSTAR-Org/Lunar_X/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=MacroSTAR-Org/Lunar_X"/>
+</a>
 
 项目为氛围编程（Vibe Coding），介意请勿使用。
 
