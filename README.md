@@ -65,7 +65,7 @@ Lunar_X/
 
 [插件开发文档](https://lunar.macrostar.top/) （文档还在编写中，敬请期待。）
 
-Contributors：
+## Contributors
 
 [后藤一里](https://github.com/houtengyiliawa)
 
