@@ -14,6 +14,7 @@ from .events import Event, MessageEvent, PrivateMessageEvent, GroupMessageEvent,
 class LunarBot:
     def __init__(self, config: Dict[str, Any], main_loop: asyncio.AbstractEventLoop):
         self.config = config
+        logger.configure_from_config(config)
         self.protocol_name = config.get('protocol', 'onebot_v11')
         if self.protocol_name == 'milky':
             from .transport import MilkyTransport
@@ -38,7 +39,6 @@ class LunarBot:
         self.restart_info = None
         self.plugins = self.plugin_manager.plugins
         self.reply = ReplyUtils(self)
-        logger.configure_from_config(config)
         self.plugin_logger = logger.get_logger('LunarPlugins')
         self.msg = MessageBuilder(self)
         self.diy = DiyAPI(self)

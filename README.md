@@ -57,7 +57,7 @@ Lunar_X/
 ├── plugins/           # 插件目录（d_ 前缀 = 已禁用）
 ├── static/ templates/ # WebUI 前端资源
 ├── data/              # SQLite 数据文件
-└── logs/              # 运行日志
+└── logs/              # 运行日志（runs/ 按运行归档）
 ```
 
 

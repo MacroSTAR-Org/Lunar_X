@@ -90,6 +90,14 @@ window.Pages.Settings = {
                 </el-select>
               </el-form-item>
             </el-col>
+            <el-col :xs="24" :sm="8">
+              <el-form-item label="保存日志级别">
+                <el-select v-model="bot.log_save_levels" multiple style="width:100%" placeholder="全部保存（默认）">
+                  <el-option v-for="lv in saveLogLevels" :key="lv" :label="lv" :value="lv" />
+                </el-select>
+                <div class="form-hint">勾选的级别写入 logs/lunarx.log，并按运行归档到 logs/runs/</div>
+              </el-form-item>
+            </el-col>
           </el-row>
         </el-form>
       </el-card>
@@ -123,6 +131,7 @@ window.Pages.Settings = {
     return {
       tab: 'protocol',
       logLevels: ['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+      saveLogLevels: ['DEBUG', 'INFO', 'SUCCESS', 'WARNING', 'ERROR', 'CRITICAL'],
       saving: { protocol: false, bot: false, users: false },
 
       // 加载时的原始文件快照，保存时深拷贝它再改，未暴露的字段不会丢
@@ -134,7 +143,7 @@ window.Pages.Settings = {
       impl: { Host: '127.0.0.1', Port: 3010, AccessToken: '' },
       account: { Uin: 0 },
 
-      bot: { bot_name: '', bot_name_en: '', trigger_keyword: '$', auto_reload_plugins: true, log_level: 'INFO' },
+      bot: { bot_name: '', bot_name_en: '', trigger_keyword: '$', auto_reload_plugins: true, log_level: 'INFO', log_save_levels: [] },
       users: { super_users: '', manager_users: '' },
     };
   },
@@ -220,6 +229,7 @@ window.Pages.Settings = {
           trigger_keyword: raw.trigger_keyword || '$',
           auto_reload_plugins: raw.auto_reload_plugins !== false,
           log_level: raw.log_level || 'INFO',
+          log_save_levels: Array.isArray(raw.log_save_levels) ? raw.log_save_levels.slice() : [],
         };
 
       } catch (e) {

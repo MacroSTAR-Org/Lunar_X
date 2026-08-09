@@ -49,6 +49,13 @@
   // 排查问题时用 DEBUG，日常用 INFO
   "log_level": "INFO",
 
+  // 【保存到文件】的日志级别，可多选。控制台输出仍由上面的 log_level 决定。
+  // 每次运行会单独归档一份日志到 logs/runs/，最近一次运行的日志始终实时写入
+  // logs/lunarx.log（WebUI 控制台读取的就是它）。
+  // 可选值：DEBUG / INFO / SUCCESS / WARNING / ERROR / CRITICAL
+  // 删除该字段或留空数组 = 全部级别都保存
+  "log_save_levels": ["DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"],
+
   // 内置「答案」插件的候选数字，随机回一个。可自由增删
   "answer": [114, 3803, 114514],
 

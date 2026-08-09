@@ -3,6 +3,7 @@
   "bot_name": "Lunar X",
   "bot_name_en": "Lunar X",
   "log_level": "INFO",
+  "log_save_levels": ["DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"],
   "milky_server": "http://127.0.0.1:3010",
   "milky_token": "",
   "protocol": "milky",
