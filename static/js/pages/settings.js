@@ -1,309 +1,321 @@
 /* ============================================================
- * 设置（四合一）
- *   协议端  → appsettings.json
- *   Bot 端  → config.json  ┐ 共用一份 raw 快照，
- *   人格    → config.json  ┘ 避免两页分别持快照互相覆盖
- *   用户    → admin114.json
+ * 设置页（WebUI 自身：个性化 + 账户与安全）
  *
- * 后端 POST /api/config/<type> 是**整文件覆盖**，所以每次保存都必须
- * 基于加载时的 raw 深拷贝再改字段，未在 UI 暴露的键才不会丢。
+ * 个性化 → localStorage（lunarx_prefs），纯前端，改完即生效
+ * 账户与安全 → webui.json（/api/webui_security + /api/change_password）
+ * 登录日志 → GET /api/login_logs（logs/webui_login.log 倒序）
  * ============================================================ */
 window.Pages = window.Pages || {};
 
-const TABS = ['protocol', 'bot', 'users'];
+const PREFS_KEY = 'lunarx_prefs';
+const THEME_KEY = 'lunarx_theme';
 
 window.Pages.Settings = {
   name: 'SettingsPage',
   props: { subRoute: { type: String, default: '' } },
 
   template: `
-  <el-tabs v-model="tab" @tab-change="onTabChange">
+  <div class="settings-grid">
 
-    <!-- ========== 协议端 ========== -->
-    <el-tab-pane label="协议端" name="protocol">
-      <el-card shadow="never">
-        <div class="form-section-title">Milky 协议端（LLBot / Lagrange）</div>
+    <!-- ========== 个性化 ========== -->
+    <el-card shadow="never">
+      <div class="form-section-title">个性化</div>
+      <el-form label-position="top" @submit.prevent>
+        <el-row :gutter="16">
+          <el-col :xs="24" :sm="8">
+            <el-form-item label="主题">
+              <el-select v-model="prefs.theme" style="width:100%" @change="onThemeChange">
+                <el-option label="深色" value="dark" />
+                <el-option label="浅色" value="light" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="8">
+            <el-form-item label="默认首页">
+              <el-select v-model="prefs.default_page" style="width:100%">
+                <el-option v-for="p in pages" :key="p.id" :label="p.label" :value="p.id" />
+              </el-select>
+              <div class="form-hint">登录后进入的页面</div>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="8">
+            <el-form-item label="看板刷新间隔（秒）">
+              <el-input-number v-model="prefs.dashboard_refresh" :min="3" :max="300" :step="1" style="width:100%" />
+              <div class="form-hint">数据看板自动轮询间隔</div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="16">
+          <el-col :xs="24" :sm="8">
+            <el-form-item label="背景动效">
+              <el-switch v-model="prefs.bg_effects" active-text="开" inactive-text="关" />
+              <div class="form-hint">背景点阵漂移动画；关闭可降低 CPU 占用</div>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="8">
+            <el-form-item label="界面密度">
+              <el-select v-model="prefs.density" style="width:100%">
+                <el-option label="标准" value="standard" />
+                <el-option label="紧凑" value="compact" />
+              </el-select>
+              <div class="form-hint">紧凑模式压缩卡片与间距，单屏可看更多</div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <div class="form-actions">
+          <el-button type="primary" @click="savePrefs">保存个性化</el-button>
+        </div>
+      </el-form>
+    </el-card>
+
+    <!-- ========== 账户与安全 ========== -->
+    <el-card shadow="never">
+      <div class="form-section-title">账户与安全</div>
+
+      <!-- 凭据 -->
+      <div class="form-section">
+        <div class="form-sub-title">登录凭据</div>
         <el-form label-position="top" @submit.prevent>
-          <el-form-item label="签名服务器 URL（SignServerUrl）">
-            <el-input v-model="proto.SignServerUrl" placeholder="https://sign.lagrangecore.org/api/sign/39038" />
-            <div class="form-hint">签名服务地址，需与协议端版本匹配</div>
-          </el-form-item>
           <el-row :gutter="16">
             <el-col :xs="24" :sm="8">
-              <el-form-item label="监听 Host">
-                <el-input v-model="impl.Host" placeholder="127.0.0.1" />
+              <el-form-item label="登录用户名">
+                <el-input v-model="cred.username" maxlength="32" />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="8">
-              <el-form-item label="端口">
-                <el-input v-model.number="impl.Port" placeholder="3010" />
+              <el-form-item label="新密码">
+                <el-input v-model="cred.new1" type="password" show-password autocomplete="new-password" />
+                <div class="form-hint">不修改请留空；至少 4 位</div>
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="8">
-              <el-form-item label="AccessToken">
-                <el-input v-model="impl.AccessToken" show-password placeholder="协议端鉴权 token" />
+              <el-form-item label="确认新密码">
+                <el-input v-model="cred.new2" type="password" show-password autocomplete="new-password" />
               </el-form-item>
             </el-col>
           </el-row>
-          <el-form-item label="机器人 QQ（Uin）">
-            <el-input v-model.number="account.Uin" placeholder="QQ 号" />
+          <el-form-item label="当前密码">
+            <el-input v-model="cred.old" type="password" show-password autocomplete="current-password" style="max-width:320px" />
+            <div class="form-hint">修改用户名或密码时必须填写当前密码</div>
           </el-form-item>
           <div class="form-actions">
-            <el-button type="primary" :loading="saving.protocol" @click="saveProtocol">保存配置</el-button>
+            <el-button :loading="saving.cred" @click="saveCred">保存凭据</el-button>
           </div>
         </el-form>
-      </el-card>
-    </el-tab-pane>
+      </div>
 
-    <!-- ========== Bot 端 ========== -->
-    <el-tab-pane label="Bot 端" name="bot">
-      <el-card shadow="never">
-        <div class="form-section-title">框架基础</div>
+      <!-- 会话与安全策略 -->
+      <div class="form-section">
+        <div class="form-sub-title">会话与安全策略</div>
         <el-form label-position="top" @submit.prevent>
           <el-row :gutter="16">
             <el-col :xs="24" :sm="8">
-              <el-form-item label="机器人名称"><el-input v-model="bot.bot_name" /></el-form-item>
+              <el-form-item label="会话有效期（分钟）">
+                <el-input-number v-model="sec.session_ttl_minutes" :min="0" :max="10080" :step="30" style="width:100%" />
+                <div class="form-hint">无操作多久后自动退出；0 = 永不过期</div>
+              </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="8">
-              <el-form-item label="英文名称"><el-input v-model="bot.bot_name_en" /></el-form-item>
+              <el-form-item label="失败锁定阈值">
+                <el-input-number v-model="sec.login_fail_max" :min="1" :max="20" style="width:100%" />
+                <div class="form-hint">连续失败多少次后临时锁定</div>
+              </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="8">
-              <el-form-item label="命令触发词">
-                <el-input v-model="bot.trigger_keyword" placeholder="$" />
-                <div class="form-hint">如 $，消息以 $ 开头视为命令</div>
+              <el-form-item label="锁定时间（分钟）">
+                <el-input-number v-model="sec.login_lock_minutes" :min="1" :max="1440" style="width:100%" />
+                <div class="form-hint">锁定期间拒绝该 IP 登录</div>
               </el-form-item>
             </el-col>
           </el-row>
-          <el-row :gutter="16">
-            <el-col :xs="24" :sm="8">
-              <el-form-item label="插件热重载">
-                <el-select v-model="bot.auto_reload_plugins" style="width:100%">
-                  <el-option label="开启" :value="true" />
-                  <el-option label="关闭" :value="false" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-            <el-col :xs="24" :sm="8">
-              <el-form-item label="日志级别">
-                <el-select v-model="bot.log_level" style="width:100%">
-                  <el-option v-for="lv in logLevels" :key="lv" :label="lv" :value="lv" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-            <el-col :xs="24" :sm="8">
-              <el-form-item label="保存日志级别">
-                <el-select v-model="bot.log_save_levels" multiple style="width:100%" placeholder="全部保存（默认）">
-                  <el-option v-for="lv in saveLogLevels" :key="lv" :label="lv" :value="lv" />
-                </el-select>
-                <div class="form-hint">勾选的级别写入 logs/lunarx.log，并按运行归档到 logs/runs/</div>
-              </el-form-item>
-            </el-col>
-          </el-row>
-        </el-form>
-      </el-card>
-
-    </el-tab-pane>
-
-    <!-- ========== 用户 ========== -->
-    <el-tab-pane label="用户" name="users">
-      <el-card shadow="never">
-        <div class="form-section-title">管理员名单</div>
-        <el-form label-position="top" @submit.prevent>
-          <el-form-item label="超级管理员（super_users）">
-            <el-input v-model="users.super_users" type="textarea" :rows="3" placeholder="123456, 789012" />
-            <div class="form-hint">拥有全部权限，包括重启机器人、删除语录等</div>
-          </el-form-item>
-          <el-form-item label="管理员（manager_users）">
-            <el-input v-model="users.manager_users" type="textarea" :rows="3" placeholder="123456, 789012" />
-            <div class="form-hint">可执行禁言、踢人、删除语录等群管理操作</div>
+          <el-form-item label="IP 白名单（逗号分隔，留空 = 不限制）">
+            <el-input v-model="sec.allowed_ips" type="textarea" :rows="2" placeholder="127.0.0.1, 192.168.1.100" />
+            <div class="form-hint">仅允许列表内 IP 访问面板；留空则任何来源均可</div>
           </el-form-item>
           <div class="form-actions">
-            <el-button type="primary" :loading="saving.users" @click="saveUsers">保存配置</el-button>
+            <el-button :loading="saving.sec" @click="saveSecurity">保存安全策略</el-button>
+            <el-button type="danger" plain :loading="saving.forceLogout" @click="forceLogoutAll">强制全部下线</el-button>
           </div>
         </el-form>
-      </el-card>
-    </el-tab-pane>
+      </div>
 
-  </el-tabs>
+      <!-- 登录日志 -->
+      <div class="form-section">
+        <div class="form-sub-title">登录日志（最近 {{ logs.length }} 条）</div>
+        <el-button text type="primary" size="small" :loading="loadingLogs" @click="loadLogs">刷新</el-button>
+        <el-table :data="logs" size="small" style="width:100%;margin-top:10px" max-height="320">
+          <el-table-column prop="time" label="时间" width="170" />
+          <el-table-column prop="ip" label="IP" width="140" />
+          <el-table-column prop="username" label="用户名" min-width="100" />
+          <el-table-column prop="result" label="结果" width="70">
+            <template #default="{ row }">
+              <el-tag :type="row.ok ? 'success' : 'danger'" size="small" effect="plain">{{ row.result }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="reason" label="备注" min-width="160" />
+        </el-table>
+      </div>
+
+    </el-card>
+  </div>
   `,
 
   data() {
     return {
-      tab: 'protocol',
-      logLevels: ['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-      saveLogLevels: ['DEBUG', 'INFO', 'SUCCESS', 'WARNING', 'ERROR', 'CRITICAL'],
-      saving: { protocol: false, bot: false, users: false },
-
-      // 加载时的原始文件快照，保存时深拷贝它再改，未暴露的字段不会丢
-      rawAppsettings: null,
-      rawConfig: null,
-      rawAdmin: null,
-
-      proto: { SignServerUrl: '' },
-      impl: { Host: '127.0.0.1', Port: 3010, AccessToken: '' },
-      account: { Uin: 0 },
-
-      bot: { bot_name: '', bot_name_en: '', trigger_keyword: '$', auto_reload_plugins: true, log_level: 'INFO', log_save_levels: [] },
-      users: { super_users: '', manager_users: '' },
+      pages: [
+        { id: 'dashboard', label: '看板' },
+        { id: 'config', label: '配置' },
+        { id: 'settings', label: '设置' },
+        { id: 'plugins', label: '插件' },
+        { id: 'market', label: '市场' },
+        { id: 'console', label: '控制台' },
+      ],
+      prefs: { theme: 'dark', default_page: 'dashboard', dashboard_refresh: 10, bg_effects: true, density: 'standard' },
+      cred: { username: '', old: '', new1: '', new2: '' },
+      sec: { session_ttl_minutes: 0, allowed_ips: '', login_fail_max: 5, login_lock_minutes: 15 },
+      logs: [],
+      saving: { cred: false, sec: false, forceLogout: false },
+      loadingLogs: false,
     };
   },
 
   created() {
-    if (TABS.includes(this.subRoute)) this.tab = this.subRoute;
-  },
-
-  watch: {
-    // 组件按 page 做 key，子路由变化不会重建组件，必须监听同步过来，
-    // 否则浏览器前进/后退、或从 #/settings/bot 跳 #/settings/users 时标签不动
-    subRoute(v) {
-      if (TABS.includes(v) && v !== this.tab) this.tab = v;
-    },
-  },
-
-  mounted() {
-    this.loadAppsettings();
-    this.loadConfig();
-    this.loadAdmin();
+    this.loadPrefs();
+    this.loadSecurity();
+    this.loadLogs();
+    this.loadUser();
   },
 
   methods: {
-    /** 切换子标签时同步到 hash，刷新页面能回到同一标签 */
-    onTabChange(name) {
-      location.hash = '#/settings/' + name;
+    // ---------- 个性化 ----------
+    loadPrefs() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
+        this.prefs = Object.assign(this.prefs, raw);
+      } catch (e) { /* 用默认值 */ }
+      // 主题跟随现状（lunarx_theme），避免与顶栏切换不同步
+      this.prefs.theme = localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
     },
 
-    // ---------- 协议端 ----------
-    async loadAppsettings() {
+    onThemeChange(theme) {
+      // 主题由 app.js 的 applyTheme 统一处理，这里只需写入并派发事件
+      localStorage.setItem(THEME_KEY, theme);
+      window.dispatchEvent(new CustomEvent('lunarx-theme-change', { detail: theme }));
+      window.setTheme && window.setTheme(theme);
+    },
+
+    savePrefs() {
       try {
-        const raw = await Api.get('/api/config/appsettings');
-        this.rawAppsettings = raw;
-        this.proto.SignServerUrl = raw.SignServerUrl || '';
-        const impls = raw.Implementations || [];
-        const i = impls[0] || {};
-        this.impl = {
-          Host: i.Host || '127.0.0.1',
-          Port: i.Port != null ? i.Port : 3010,
-          AccessToken: i.AccessToken || '',
-        };
-        this.account = Object.assign({ Uin: 0 }, raw.Account || {});
+        localStorage.setItem(PREFS_KEY, JSON.stringify(this.prefs));
+        window.dispatchEvent(new CustomEvent('lunarx-prefs-change', { detail: this.prefs }));
+        this.$message.success('个性化设置已保存');
       } catch (e) {
-        this.$message.error('加载协议端配置失败：' + e.message);
+        this.$message.error('保存失败：' + e.message);
       }
     },
 
-    async saveProtocol() {
-      if (!this.rawAppsettings) {          // 加载失败时不能保存，否则会用空对象覆盖文件
-        this.$message.error('配置尚未加载完成，无法保存');
+    // ---------- 账户 ----------
+    async loadUser() {
+      const data = await Api.tryGet('/api/auth_status', null);
+      if (data && data.username) this.cred.username = data.username;
+    },
+
+    async saveCred() {
+      // 用户名或密码任一项要改，都必须提供当前密码
+      const username = this.cred.username.trim();
+      if (!this.cred.old) {
+        this.$message.warning('请填写当前密码');
         return;
       }
-      this.saving.protocol = true;
+      if (this.cred.new1 !== this.cred.new2) {
+        this.$message.warning('两次输入的新密码不一致');
+        return;
+      }
+      this.saving.cred = true;
       try {
-        const out = JSON.parse(JSON.stringify(this.rawAppsettings));
-        out.SignServerUrl = this.proto.SignServerUrl;
-        if (!Array.isArray(out.Implementations) || !out.Implementations.length) out.Implementations = [{}];
-        out.Implementations[0] = Object.assign({}, out.Implementations[0], {
-          Host: this.impl.Host,
-          Port: Number(this.impl.Port) || 0,
-          AccessToken: this.impl.AccessToken,
+        const data = await Api.post('/api/change_password', {
+          old_password: this.cred.old,
+          new_password: this.cred.new1 || this.cred.old,   // 密码不改时原样提交
+          new_username: username,
         });
-        out.Account = Object.assign({}, out.Account, this.account);
-        await Api.post('/api/config/appsettings', out);
-        this.rawAppsettings = out;
-        this.$message.success('协议端配置已保存');
+        this.$message.success((data && data.message) || '凭据已保存');
+        this.cred.old = this.cred.new1 = this.cred.new2 = '';
       } catch (e) {
         this.$message.error(e.message);
       } finally {
-        this.saving.protocol = false;
+        this.saving.cred = false;
       }
     },
 
-    // ---------- config.json（Bot 端 + 人格共用） ----------
-    async loadConfig() {
+    // ---------- 安全策略 ----------
+    async loadSecurity() {
       try {
-        const raw = await Api.get('/api/config/config');
-        this.rawConfig = raw;
-
-        this.bot = {
-          bot_name: raw.bot_name || '',
-          bot_name_en: raw.bot_name_en || '',
-          trigger_keyword: raw.trigger_keyword || '$',
-          auto_reload_plugins: raw.auto_reload_plugins !== false,
-          log_level: raw.log_level || 'INFO',
-          log_save_levels: Array.isArray(raw.log_save_levels) ? raw.log_save_levels.slice() : [],
-        };
-
+        const data = await Api.get('/api/webui_security');
+        this.sec.session_ttl_minutes = data.session_ttl_minutes != null ? data.session_ttl_minutes : 0;
+        this.sec.login_fail_max = data.login_fail_max != null ? data.login_fail_max : 5;
+        this.sec.login_lock_minutes = data.login_lock_minutes != null ? data.login_lock_minutes : 15;
+        this.sec.allowed_ips = Array.isArray(data.allowed_ips) ? data.allowed_ips.join(', ') : '';
       } catch (e) {
-        this.$message.error('加载 Bot 配置失败：' + e.message);
+        this.$message.error('加载安全设置失败：' + e.message);
       }
     },
 
-    /** Bot 端与人格都写 config.json，统一走这里，写完刷新本地快照 */
-    async saveConfig(mutate, flag, okMsg) {
-      if (!this.rawConfig) {
-        this.$message.error('配置尚未加载完成，无法保存');
+    async saveSecurity() {
+      this.saving.sec = true;
+      try {
+        await Api.post('/api/webui_security', {
+          session_ttl_minutes: this.sec.session_ttl_minutes,
+          login_fail_max: this.sec.login_fail_max,
+          login_lock_minutes: this.sec.login_lock_minutes,
+          allowed_ips: this.sec.allowed_ips,
+        });
+        this.$message.success('安全策略已保存');
+      } catch (e) {
+        this.$message.error(e.message);
+      } finally {
+        this.saving.sec = false;
+      }
+    },
+
+    async forceLogoutAll() {
+      try {
+        await this.$confirm('强制下线所有会话（含当前登录）？需要重新登录。', '强制下线', { type: 'warning' });
+      } catch (e) {
         return;
       }
-      this.saving[flag] = true;
+      this.saving.forceLogout = true;
       try {
-        const out = JSON.parse(JSON.stringify(this.rawConfig));
-        mutate(out);
-        await Api.post('/api/config/config', out);
-        this.rawConfig = out;
-        this.$message.success(okMsg);
+        await Api.post('/api/webui_security/force_logout');
+        this.$message.success('已强制全部下线，正在跳转登录页');
+        setTimeout(() => { location.href = '/login'; }, 800);
       } catch (e) {
         this.$message.error(e.message);
-      } finally {
-        this.saving[flag] = false;
+        this.saving.forceLogout = false;
       }
     },
 
-    saveBot() {
-      return this.saveConfig(out => {
-        Object.assign(out, this.bot);
-      }, 'bot', 'Bot 配置已保存');
-    },
-
-    // ---------- 用户 ----------
-    async loadAdmin() {
+    // ---------- 登录日志 ----------
+    async loadLogs() {
+      this.loadingLogs = true;
       try {
-        const raw = await Api.get('/api/config/admin');
-        this.rawAdmin = raw;
-        this.users = {
-          super_users: (raw.super_users || []).join(', '),
-          manager_users: (raw.manager_users || []).join(', '),
-        };
+        const data = await Api.get('/api/login_logs?limit=100');
+        this.logs = (Array.isArray(data) ? data : []).map(line => {
+          // 行格式：时间 | IP | 用户名 | 结果 | 备注
+          const parts = String(line).split(' | ');
+          return {
+            time: parts[0] || '',
+            ip: parts[1] || '',
+            username: parts[2] || '',
+            result: parts[3] || '',
+            ok: parts[3] === '成功',
+            reason: parts[4] || '',
+          };
+        });
       } catch (e) {
-        this.$message.error('加载用户配置失败：' + e.message);
-      }
-    },
-
-    /** 中英文逗号、空格、换行都能作分隔符 */
-    parseQQList(s) {
-      return String(s || '')
-        .split(/[,，\s]+/)
-        .map(x => x.trim())
-        .filter(Boolean)
-        .map(Number)
-        .filter(n => !isNaN(n));
-    },
-
-    async saveUsers() {
-      if (!this.rawAdmin) {
-        this.$message.error('配置尚未加载完成，无法保存');
-        return;
-      }
-      this.saving.users = true;
-      try {
-        const out = JSON.parse(JSON.stringify(this.rawAdmin));
-        out.super_users = this.parseQQList(this.users.super_users);
-        out.manager_users = this.parseQQList(this.users.manager_users);
-        await Api.post('/api/config/admin', out);
-        this.rawAdmin = out;
-        this.$message.success('用户配置已保存');
-      } catch (e) {
-        this.$message.error(e.message);
+        this.logs = [];
+        this.$message.error('加载登录日志失败：' + e.message);
       } finally {
-        this.saving.users = false;
+        this.loadingLogs = false;
       }
     },
   },

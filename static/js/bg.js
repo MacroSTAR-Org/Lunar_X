@@ -216,9 +216,24 @@
     if (REDUCED) step(0);
   });
 
+  // 个性化偏好：关闭背景动效时停止动画并清屏，打开时恢复
+  function bgEnabled() {
+    try {
+      const raw = JSON.parse(localStorage.getItem('lunarx_prefs') || '{}');
+      return raw.bg_effects !== false;
+    } catch (e) {
+      return true;
+    }
+  }
+  function applyBg() {
+    if (bgEnabled()) { canvas.style.display = ''; start(); }
+    else { stop(); canvas.style.display = 'none'; }
+  }
+  window.addEventListener('lunarx-prefs-change', applyBg);
+
   readColor();
   resize();
-  if (REDUCED) step(0);        // 静态一帧，不做动画
+  if (REDUCED || !bgEnabled()) { if (REDUCED) step(0); else canvas.style.display = 'none'; }
   else start();
 
   // 暴露句柄，方便在控制台里实时调参数（改 CFG 下一帧就生效）

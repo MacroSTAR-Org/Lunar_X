@@ -599,6 +599,30 @@ body::after {
 }
 .form-actions { margin-top: 4px; display: flex; gap: 10px; align-items: center; }
 
+/* 设置页：两个区块卡片上下排布 */
+.settings-grid { display: flex; flex-direction: column; gap: 18px; }
+.settings-grid .el-card { animation: rise var(--dur-3) var(--ease) both; }
+.settings-grid .el-card:nth-child(2) { animation-delay: .05s; }
+
+/* 设置页内的小节标题（比 form-section-title 弱一级） */
+.form-sub-title {
+  font: 600 12px/1.4 var(--md3e-sans);
+  letter-spacing: .1em;
+  color: var(--fg-0);
+  margin: 0 0 16px;
+  padding-left: 10px;
+  border-left: 2px solid var(--fg-0);
+}
+
+/* 紧凑密度：压缩卡片内边距与间距 */
+body.density-compact .el-card__body { padding: 14px !important; }
+body.density-compact .stat-grid { gap: 10px; }
+body.density-compact .stat-card .stat-value { font-size: 23px; }
+body.density-compact .el-form-item { margin-bottom: 12px; }
+body.density-compact .page-body { padding: 16px 20px 28px; }
+body.density-compact .form-section-title { margin-bottom: 14px; padding-bottom: 8px; }
+
+
 .el-form-item__label {
   font-size: 12px !important;
   letter-spacing: .04em;

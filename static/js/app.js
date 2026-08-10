@@ -2,7 +2,7 @@
  * Lunar X 控制面板 — 应用入口
  *
  * 结构：Navigation Rail（84px）+ 顶栏 + 页面容器
- * 路由：手写 hash 路由，形如 #/dashboard、#/settings/bot
+ * 路由：手写 hash 路由，形如 #/dashboard、#/config/bot
  * 主题：dark / light 两档，存 localStorage.lunarx_theme
  * ============================================================ */
 (function () {
@@ -60,7 +60,8 @@
   // ---------- 导航定义 ----------
   const MENU = [
     { id: 'dashboard', label: '看板',   icon: 'Odometer', title: '数据看板', sub: '框架、协议端与服务器的实时运行状态（每 10 秒自动刷新）' },
-    { id: 'settings',  label: '设置',   icon: 'Setting',  title: '设置',     sub: '协议端连接、框架参数、AI 人格与管理员权限' },
+    { id: 'config',    label: '配置',   icon: 'Operation', title: '配置',     sub: '协议端连接、框架参数与管理员权限' },
+    { id: 'settings',  label: '设置',   icon: 'Setting',  title: '设置',     sub: 'WebUI 个性化、账户与会话安全' },
     { id: 'plugins',   label: '插件',   icon: 'Box',      title: '插件管理', sub: '已安装插件的启用、帮助与卸载' },
     { id: 'market',    label: '市场',   icon: 'Shop',     title: '插件市场', sub: '插件源设置与在线插件安装' },
     { id: 'console',   label: '控制台', icon: 'Monitor',  title: '控制台',   sub: 'Lunar X 框架实时运行日志（长轮询，约 50ms 延迟）' },
@@ -68,12 +69,25 @@
 
   // 旧版书签兼容：#/protocol 这类地址重定向到现在的位置。
   // persona 的配置已经搬进 ai_chat 插件，所以指到插件管理页。
+  // 旧设置页已改名为配置页（#/settings/x → #/config/x）
   const LEGACY_ROUTES = {
-    protocol: 'settings/protocol',
-    bot: 'settings/bot',
-    users: 'settings/users',
+    protocol: 'config/protocol',
+    bot: 'config/bot',
+    users: 'config/users',
     persona: 'plugins',
   };
+
+  /** 读取个性化偏好（localStorage.lunarx_prefs），并提供默认值 */
+  function readPrefs() {
+    try {
+      return Object.assign(
+        { default_page: 'dashboard', dashboard_refresh: 10, bg_effects: true, density: 'standard', theme: readTheme() },
+        JSON.parse(localStorage.getItem('lunarx_prefs') || '{}')
+      );
+    } catch (e) {
+      return { default_page: 'dashboard', dashboard_refresh: 10, bg_effects: true, density: 'standard', theme: readTheme() };
+    }
+  }
 
   const App = {
     template: `
@@ -187,7 +201,9 @@
 
     async created() {
       applyTheme(this.theme);
+      this.applyDensity();
       window.addEventListener('hashchange', this.onHash);
+      window.addEventListener('lunarx-prefs-change', this.applyDensity);
       this.onHash();
       await this.loadUser();
       this.loadVersion();
@@ -196,20 +212,27 @@
 
     beforeUnmount() {
       window.removeEventListener('hashchange', this.onHash);
+      window.removeEventListener('lunarx-prefs-change', this.applyDensity);
     },
 
     methods: {
+      /** 应用密度偏好；背景动效由 bg.js 自行监听 lunarx-prefs-change */
+      applyDensity() {
+        document.body.classList.toggle('density-compact', readPrefs().density === 'compact');
+      },
+
       /** 解析 #/page 或 #/page/sub，非法路由回落到看板 */
       onHash() {
-        const raw = (location.hash || '#/dashboard').replace(/^#\/?/, '');
+        const def = readPrefs().default_page || 'dashboard';
+        const raw = (location.hash || '#/' + def).replace(/^#\/?/, '');
         const parts = raw.split('/').filter(Boolean);
-        let id = parts[0] || 'dashboard';
+        let id = parts[0] || def;
 
         if (LEGACY_ROUTES[id]) {
           location.hash = '#/' + LEGACY_ROUTES[id];
           return;                       // hashchange 会再次触发本函数
         }
-        if (!this.menu.some(m => m.id === id)) id = 'dashboard';
+        if (!this.menu.some(m => m.id === id)) id = def;
 
         this.page = id;
         this.subRoute = parts[1] || '';

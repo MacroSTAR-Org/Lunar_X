@@ -96,6 +96,41 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
+# ---------- 登录安全（会话有效期 / IP 白名单 / 失败锁定 / 登录日志） ----------
+
+LOGIN_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs', 'webui_login.log')
+
+# 与安全相关的 webui.json 字段白名单（只允许这些键经接口读写）
+SECURITY_KEYS = ('session_ttl_minutes', 'allowed_ips', 'login_fail_max', 'login_lock_minutes')
+
+# IP → 失败计数与锁定状态（进程内，重启清零；锁定信息同时写入登录日志）
+_login_failures = {}
+
+
+def _security_settings():
+    """读取安全相关配置，缺省给保守默认值"""
+    cfg = load_webui_config()
+    return {
+        'session_ttl_minutes': int(cfg.get('session_ttl_minutes') or 0),
+        'allowed_ips': cfg.get('allowed_ips') or [],
+        'login_fail_max': int(cfg.get('login_fail_max') or 5),
+        'login_lock_minutes': int(cfg.get('login_lock_minutes') or 15),
+    }
+
+
+def _append_login_log(ip, username, ok, reason=''):
+    """登录成功/失败都落一行日志，供「设置 → 账户与安全 → 登录日志」查看"""
+    try:
+        os.makedirs(os.path.dirname(LOGIN_LOG_PATH), exist_ok=True)
+        stamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        result = '成功' if ok else '失败'
+        line = f"{stamp} | {ip} | {username or '-'} | {result} | {reason}"
+        with open(LOGIN_LOG_PATH, 'a', encoding='utf-8') as f:
+            f.write(line + '\n')
+    except Exception:
+        pass
+
+
 @app.after_request
 def add_no_cache(response):
     """页面/API 不缓存，避免浏览器加载旧版 HTML/JS"""
@@ -106,13 +141,35 @@ def add_no_cache(response):
 
 @app.before_request
 def require_login():
-    """除登录页/登录接口/静态资源外，所有页面与 API 均需登录"""
+    """除登录页/登录接口/静态资源外，所有页面与 API 均需登录。
+
+    登录会话有效期内允许访问；无操作超过 session_ttl_minutes（0 = 永不过期）
+    自动失效。配置了 allowed_ips（非空数组）时校验来源 IP。
+    """
     if request.path == '/login' or request.path == '/api/login' or request.path == '/api/auth_status':
         return None
     if request.path.startswith('/static/'):
         return None
+
+    sec = _security_settings()
+    client_ip = request.remote_addr or ''
+
+    if sec['allowed_ips'] and client_ip not in sec['allowed_ips']:
+        if request.path.startswith('/api/'):
+            return jsonify({'error': '来源 IP 不在白名单内'}), 403
+        return 'Forbidden', 403
+
     if session.get('logged_in'):
+        ttl = sec['session_ttl_minutes']
+        if ttl > 0:
+            login_at = session.get('login_time') or 0
+            if time.time() - login_at > ttl * 60:
+                session.clear()
+                if request.path.startswith('/api/'):
+                    return jsonify({'error': '会话已过期，请重新登录'}), 401
+                return redirect(url_for('login_page'))
         return None
+
     if request.path.startswith('/api/'):
         return jsonify({'error': '未登录'}), 401
     return redirect(url_for('login_page'))
@@ -211,7 +268,11 @@ def init_default_configs():
             "plugins_index_repo": "MacroSTAR-Org/Unisphere",
             "username": "lunarx",
             "password_hash": hash_password("lunarx"),
-            "session_secret": secrets.token_hex(32)
+            "session_secret": secrets.token_hex(32),
+            "session_ttl_minutes": 0,
+            "allowed_ips": [],
+            "login_fail_max": 5,
+            "login_lock_minutes": 15
         }
         with open(WEBUI_JSON_PATH, 'w', encoding='utf-8') as f:
             json.dump(default_webui, f, indent=2, ensure_ascii=False)
@@ -231,6 +292,18 @@ def init_default_configs():
                 updated = True
             if "session_secret" not in webui_config:
                 webui_config["session_secret"] = secrets.token_hex(32)
+                updated = True
+            if "session_ttl_minutes" not in webui_config:
+                webui_config["session_ttl_minutes"] = 0
+                updated = True
+            if "allowed_ips" not in webui_config:
+                webui_config["allowed_ips"] = []
+                updated = True
+            if "login_fail_max" not in webui_config:
+                webui_config["login_fail_max"] = 5
+                updated = True
+            if "login_lock_minutes" not in webui_config:
+                webui_config["login_lock_minutes"] = 15
                 updated = True
             if updated:
                 f.seek(0)
@@ -270,23 +343,124 @@ def login():
     data = request.get_json() or {}
     username = data.get('username', '')
     password = data.get('password', '')
+    client_ip = request.remote_addr or ''
+
+    sec = _security_settings()
+    fail_max = max(1, sec['login_fail_max'])
+    lock_min = max(1, sec['login_lock_minutes'])
+
+    # 连续失败锁定：IP 维度，超过阈值后临时拒绝登录
+    now = time.time()
+    state = _login_failures.get(client_ip, {'count': 0, 'until': 0})
+    if state['until'] > now:
+        remain = int(state['until'] - now) // 60 + 1
+        _append_login_log(client_ip, username, False, f'IP 被锁定，剩余 {remain} 分钟')
+        return jsonify({'error': f'失败次数过多，请 {remain} 分钟后再试'}), 403
 
     config = load_webui_config()
     stored_username = config.get('username', 'lunarx')
     stored_hash = config.get('password_hash', '')
 
     if username == stored_username and verify_password(password, stored_hash):
+        _login_failures.pop(client_ip, None)
         session['logged_in'] = True
         session['username'] = username
+        session['login_time'] = now
         app.logger.info(f"WebUI 登录成功: {username}")
+        _append_login_log(client_ip, username, True)
         return jsonify({'message': '登录成功', 'username': username})
-    app.logger.warning(f"WebUI 登录失败: {username}")
+
+    # 失败：计数并记录日志，达到阈值则锁定该 IP
+    state['count'] += 1
+    if state['count'] >= fail_max:
+        state['until'] = now + lock_min * 60
+        state['count'] = 0
+        reason = f'已达 {fail_max} 次失败，锁定 {lock_min} 分钟'
+    else:
+        reason = f'剩余 {fail_max - state["count"]} 次机会'
+    _login_failures[client_ip] = state
+    app.logger.warning(f"WebUI 登录失败: {username} ({reason})")
+    _append_login_log(client_ip, username, False, reason)
     return jsonify({'error': '用户名或密码错误'}), 401
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
     session.clear()
     return jsonify({'message': '已退出登录'})
+
+@app.route('/api/login_logs', methods=['GET'])
+def login_logs():
+    """读取登录日志（最近的，倒序返回），不存在时返回空列表"""
+    limit = max(1, min(500, request.args.get('limit', default=100, type=int)))
+    lines = []
+    try:
+        with open(LOGIN_LOG_PATH, 'r', encoding='utf-8') as f:
+            lines = [ln.rstrip('\n') for ln in f if ln.strip()]
+    except OSError:
+        pass
+    return jsonify(lines[-limit:][::-1])
+
+@app.route('/api/webui_security', methods=['GET'])
+def get_webui_security():
+    """返回当前安全设置（会话有效期 / IP 白名单 / 失败锁定阈值），不含敏感凭据"""
+    cfg = load_webui_config()
+    out = {k: cfg.get(k) for k in SECURITY_KEYS}
+    sec = _security_settings()
+    out['login_fail_max'] = sec['login_fail_max']
+    out['login_lock_minutes'] = sec['login_lock_minutes']
+    return jsonify(out)
+
+@app.route('/api/webui_security', methods=['POST'])
+def set_webui_security():
+    """更新安全设置，只接受白名单内的键，防止误覆盖凭据"""
+    data = request.get_json() or {}
+    cfg = load_webui_config()
+    changed = {}
+
+    if 'session_ttl_minutes' in data:
+        try:
+            cfg['session_ttl_minutes'] = max(0, int(data['session_ttl_minutes']))
+            changed['session_ttl_minutes'] = cfg['session_ttl_minutes']
+        except (TypeError, ValueError):
+            pass
+
+    if 'allowed_ips' in data:
+        raw = data['allowed_ips']
+        ips = [x.strip() for x in raw.split(',')] if isinstance(raw, str) else []
+        ips = [x for x in ips if x]
+        cfg['allowed_ips'] = ips
+        changed['allowed_ips'] = ips
+
+    if 'login_fail_max' in data:
+        try:
+            cfg['login_fail_max'] = max(1, int(data['login_fail_max']))
+            changed['login_fail_max'] = cfg['login_fail_max']
+        except (TypeError, ValueError):
+            pass
+
+    if 'login_lock_minutes' in data:
+        try:
+            cfg['login_lock_minutes'] = max(1, int(data['login_lock_minutes']))
+            changed['login_lock_minutes'] = cfg['login_lock_minutes']
+        except (TypeError, ValueError):
+            pass
+
+    if changed:
+        save_webui_config(cfg)
+        app.logger.info(f"WebUI 安全设置已更新: {sorted(changed)}")
+    return jsonify(changed)
+
+@app.route('/api/webui_security/force_logout', methods=['POST'])
+def force_logout_all():
+    """强制所有会话下线：轮换 session_secret，旧 cookie 全部失效"""
+    new_secret = secrets.token_hex(32)
+    cfg = load_webui_config()
+    cfg['session_secret'] = new_secret
+    save_webui_config(cfg)
+    app.secret_key = new_secret
+    session.clear()
+    app.logger.info("WebUI 已强制所有会话下线（session_secret 已轮换）")
+    return jsonify({'message': '已强制所有会话下线，请重新登录'})
 
 
 def _dir_size(path):

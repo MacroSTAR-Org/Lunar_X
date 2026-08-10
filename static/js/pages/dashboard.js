@@ -103,21 +103,36 @@ window.Pages.Dashboard = {
     } catch (e) { /* ECharts 初始化失败时看板其余部分仍可用 */ }
 
     this.load();
-    this.timer = setInterval(this.load, 10000);
+    this.applyRefresh();
     window.addEventListener('resize', this.onResize);
-    // 明暗切换后立即重绘，不必等下一次 10 秒轮询
+    // 明暗切换后立即重绘，不必等下一次轮询
     window.addEventListener('lunarx-theme-change', this.renderChart);
+    // 刷新间隔偏好变化后重置定时器
+    window.addEventListener('lunarx-prefs-change', this.applyRefresh);
   },
 
   beforeUnmount() {
     clearInterval(this.timer);
     window.removeEventListener('resize', this.onResize);
     window.removeEventListener('lunarx-theme-change', this.renderChart);
+    window.removeEventListener('lunarx-prefs-change', this.applyRefresh);
     if (this.chart) { this.chart.dispose(); this.chart = null; }
   },
 
   methods: {
     onResize() { if (this.chart) this.chart.resize(); },
+
+    /** 按偏好读取看板轮询间隔（秒），变化时重建定时器 */
+    applyRefresh() {
+      let interval = 10000;
+      try {
+        const raw = JSON.parse(localStorage.getItem('lunarx_prefs') || '{}');
+        const s = Number(raw.dashboard_refresh);
+        if (s >= 3 && s <= 300) interval = s * 1000;
+      } catch (e) { /* 用默认值 */ }
+      clearInterval(this.timer);
+      this.timer = setInterval(this.load, interval);
+    },
 
     async load() {
       try {
