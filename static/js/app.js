@@ -61,11 +61,13 @@
   const MENU = [
     { id: 'dashboard', label: '看板',   icon: 'Odometer', title: '数据看板', sub: '框架、协议端与服务器的实时运行状态（每 10 秒自动刷新）' },
     { id: 'config',    label: '配置',   icon: 'Operation', title: '配置',     sub: '协议端连接、框架参数与管理员权限' },
-    { id: 'settings',  label: '设置',   icon: 'Setting',  title: '设置',     sub: 'WebUI 个性化、账户与会话安全' },
     { id: 'plugins',   label: '插件',   icon: 'Box',      title: '插件管理', sub: '已安装插件的启用、帮助与卸载' },
     { id: 'market',    label: '市场',   icon: 'Shop',     title: '插件市场', sub: '插件源设置与在线插件安装' },
     { id: 'console',   label: '控制台', icon: 'Monitor',  title: '控制台',   sub: 'Lunar X 框架实时运行日志（长轮询，约 50ms 延迟）' },
   ];
+
+  /** 设置页不在常规导航里，而是放在侧边栏底部和头像/明暗切换并排 */
+  const SETTINGS_BTN = { id: 'settings', title: '设置', sub: 'WebUI 个性化、账户与会话安全' };
 
   // 旧版书签兼容：#/protocol 这类地址重定向到现在的位置。
   // persona 的配置已经搬进 ai_chat 插件，所以指到插件管理页。
@@ -104,6 +106,10 @@
 
         <div class="rail-btn" :title="theme === 'dark' ? '切换到浅色' : '切换到深色'" @click="toggleTheme">
           <el-icon><component :is="theme === 'dark' ? 'Sunny' : 'Moon'" /></el-icon>
+        </div>
+
+        <div class="rail-btn" :class="{ active: page === 'settings' }" title="设置" @click="go('settings')">
+          <el-icon><Setting /></el-icon>
         </div>
 
         <el-dropdown trigger="click" placement="right-end" @command="onUserCommand">
@@ -188,7 +194,7 @@
 
     computed: {
       current() {
-        return this.menu.find(m => m.id === this.page) || this.menu[0];
+        return this.menu.find(m => m.id === this.page) || SETTINGS_BTN;
       },
       currentComp() {
         const key = this.page.charAt(0).toUpperCase() + this.page.slice(1);
@@ -232,7 +238,7 @@
           location.hash = '#/' + LEGACY_ROUTES[id];
           return;                       // hashchange 会再次触发本函数
         }
-        if (!this.menu.some(m => m.id === id)) id = def;
+        if (!this.menu.some(m => m.id === id) && id !== SETTINGS_BTN.id) id = def;
 
         this.page = id;
         this.subRoute = parts[1] || '';

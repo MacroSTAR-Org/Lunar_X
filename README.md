@@ -3,7 +3,7 @@
 <h1>Lunar X｜新势力，轻装上阵。</h1>
 <p align="center">新一代QQ机器人框架，轻便、扩展性强，随心所欲。</p>
 
-![](https://img.shields.io/badge/Python-3776AB?style=flat&logo=Python&logoColor=ffffff) ![](https://img.shields.io/github/release/MacroSTAR-Org/Lunar_X) ![](https://img.shields.io/badge/版本-0.1.0.126-6a4e9a?style=flat) ![](https://img.shields.io/github/license/MacroSTAR-MS/Lunar_X.svg?logo=github) ![](https://img.shields.io/github/issues/MacroSTAR-MS/Lunar_X?color=F48D73) ![](https://img.shields.io/github/forks/MacroSTAR-MS/Lunar_X.svg?style=social&label=Fork&maxAge=2592000) ![](https://img.shields.io/github/stars/MacroSTAR-MS/Lunar_X.svg?style=social&label=Star&maxAge=2592000)
+![](https://img.shields.io/badge/Python-3776AB?style=flat&logo=Python&logoColor=ffffff) ![](https://img.shields.io/github/release/MacroSTAR-Org/Lunar_X) ![](https://img.shields.io/badge/版本-0.1.0.128-6a4e9a?style=flat) ![](https://img.shields.io/github/license/MacroSTAR-MS/Lunar_X.svg?logo=github) ![](https://img.shields.io/github/issues/MacroSTAR-MS/Lunar_X?color=F48D73) ![](https://img.shields.io/github/forks/MacroSTAR-MS/Lunar_X.svg?style=social&label=Fork&maxAge=2592000) ![](https://img.shields.io/github/stars/MacroSTAR-MS/Lunar_X.svg?style=social&label=Star&maxAge=2592000)
 
 ![](https://api.moedog.org/count/@Lunar_X.readme)
 </div>

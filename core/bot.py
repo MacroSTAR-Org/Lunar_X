@@ -932,5 +932,5 @@ class LunarBot:
 
 # MacroSTAR-Studio 2025
 # 项目名称: Lunar X
-# 版本: BETA 0.1.0.126
+# 版本: BETA 0.1.0.128
 # 全新一代QQ机器人框架

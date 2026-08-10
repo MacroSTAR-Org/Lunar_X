@@ -338,6 +338,7 @@ body::after {
   transition: background var(--dur-2) var(--ease), color var(--dur-2) var(--ease);
 }
 .rail-btn:hover { background: var(--state); color: var(--fg-0); }
+.rail-btn.active { color: var(--fg-0); background: var(--state); }
 /* 明暗切换时图标转半圈，呼应"翻面"的语义 */
 .rail-btn .el-icon { transition: transform var(--dur-3) var(--ease); }
 .rail-btn:hover .el-icon { transform: rotate(180deg); }
