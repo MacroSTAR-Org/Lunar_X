@@ -168,7 +168,7 @@ window.Pages.Config = {
   methods: {
     /** 切换子标签时同步到 hash，刷新页面能回到同一标签 */
     onTabChange(name) {
-      location.hash = '#/settings/' + name;
+      location.hash = '#/config/' + name;
     },
 
     // ---------- 协议端 ----------
