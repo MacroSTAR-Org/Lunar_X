@@ -122,9 +122,22 @@
         </main>
       </div>
 
-      <el-dialog v-model="passwordVisible" title="修改密码" width="420px" append-to-body>
+      <el-dialog v-model="passwordVisible" :title="securityMode ? '安全提醒' : '修改密码'"
+                 width="420px" append-to-body
+                 :close-on-click-modal="!securityMode" :close-on-press-escape="!securityMode"
+                 :show-close="!securityMode">
+        <div v-if="securityMode" class="sec-banner">
+          <span class="sec-banner-dot"></span>
+          <div>
+            <div class="sec-banner-title">检测到默认凭据</div>
+            <div class="sec-banner-msg">当前仍在使用出厂默认的用户名和密码（lunarx / lunarx），控制台存在被未授权访问的风险。请立即设置新的用户名和密码后再使用。</div>
+          </div>
+        </div>
         <el-form label-position="top" @submit.prevent>
-          <el-form-item label="旧密码">
+          <el-form-item v-if="securityMode" label="新用户名">
+            <el-input v-model="pw.user" placeholder="自定义用户名" maxlength="32" />
+          </el-form-item>
+          <el-form-item v-if="!securityMode" label="旧密码">
             <el-input v-model="pw.old" type="password" show-password autocomplete="current-password" />
           </el-form-item>
           <el-form-item label="新密码">
@@ -136,7 +149,7 @@
           </el-form-item>
         </el-form>
         <template #footer>
-          <el-button @click="passwordVisible = false">取消</el-button>
+          <el-button v-if="!securityMode" @click="passwordVisible = false">取消</el-button>
           <el-button type="primary" :loading="pwSaving" @click="doChangePassword">确认修改</el-button>
         </template>
       </el-dialog>
@@ -153,8 +166,9 @@
         username: '',
         restarting: false,
         passwordVisible: false,
+        securityMode: false,
         pwSaving: false,
-        pw: { old: '', new1: '', new2: '' },
+        pw: { user: '', old: '', new1: '', new2: '' },
       };
     },
 
@@ -171,12 +185,13 @@
       },
     },
 
-    created() {
+    async created() {
       applyTheme(this.theme);
       window.addEventListener('hashchange', this.onHash);
       this.onHash();
-      this.loadUser();
+      await this.loadUser();
       this.loadVersion();
+      this.checkDefaultCredentials();
     },
 
     beforeUnmount() {
@@ -223,8 +238,21 @@
       },
 
       onUserCommand(cmd) {
-        if (cmd === 'password') this.passwordVisible = true;
-        else if (cmd === 'logout') this.doLogout();
+        if (cmd === 'password') {
+          this.securityMode = false;
+          this.passwordVisible = true;
+        } else if (cmd === 'logout') {
+          this.doLogout();
+        }
+      },
+
+      /** 登录后检测是否仍为默认凭据；若是，弹出不可关闭的安全提醒要求立即改密 */
+      async checkDefaultCredentials() {
+        const data = await Api.tryGet('/api/check_default_credentials', null);
+        if (data && data.is_default) {
+          this.securityMode = true;
+          this.passwordVisible = true;
+        }
       },
 
       async doRestart() {
@@ -250,7 +278,8 @@
       },
 
       async doChangePassword() {
-        if (!this.pw.old || !this.pw.new1) {
+        const old = this.securityMode ? 'lunarx' : this.pw.old;
+        if (!old || !this.pw.new1) {
           this.$message.warning('请填写旧密码和新密码');
           return;
         }
@@ -258,15 +287,22 @@
           this.$message.warning('两次输入的新密码不一致');
           return;
         }
+        if (this.securityMode && !this.pw.user.trim()) {
+          this.$message.warning('请设置新的用户名');
+          return;
+        }
         this.pwSaving = true;
         try {
           const data = await Api.post('/api/change_password', {
-            old_password: this.pw.old,
+            old_password: old,
             new_password: this.pw.new1,
+            new_username: this.securityMode ? this.pw.user.trim() : undefined,
           });
-          this.$message.success((data && data.message) || '密码已修改');
+          this.$message.success((data && data.message) || '凭据已修改');
+          this.username = this.securityMode ? this.pw.user.trim() : this.username;
           this.passwordVisible = false;
-          this.pw = { old: '', new1: '', new2: '' };
+          this.securityMode = false;
+          this.pw = { user: '', old: '', new1: '', new2: '' };
         } catch (e) {
           this.$message.error(e.message);
         } finally {

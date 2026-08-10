@@ -257,6 +257,14 @@ def auth_status():
         'username': session.get('username') or config.get('username', 'lunarx')
     })
 
+@app.route('/api/check_default_credentials', methods=['GET'])
+def check_default_credentials():
+    config = load_webui_config()
+    username = config.get('username', 'lunarx')
+    password_hash = config.get('password_hash', '')
+    is_default = username == 'lunarx' and verify_password('lunarx', password_hash)
+    return jsonify({'is_default': is_default})
+
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json() or {}
@@ -637,6 +645,7 @@ def change_password():
     data = request.get_json() or {}
     old_password = data.get('old_password', '')
     new_password = data.get('new_password', '')
+    new_username = data.get('new_username', '')
 
     config = load_webui_config()
     stored_hash = config.get('password_hash', '')
@@ -645,11 +654,21 @@ def change_password():
         return jsonify({'error': '旧密码错误'}), 401
     if len(new_password) < 4:
         return jsonify({'error': '新密码长度至少 4 位'}), 400
+    if new_username is not None:
+        new_username = new_username.strip()
+        if not new_username:
+            return jsonify({'error': '用户名不能为空'}), 400
+        if len(new_username) < 3:
+            return jsonify({'error': '用户名长度至少 3 位'}), 400
 
     config['password_hash'] = hash_password(new_password)
+    if new_username is not None:
+        config['username'] = new_username
     save_webui_config(config)
-    app.logger.info("WebUI 密码已修改")
-    return jsonify({'message': '密码修改成功'})
+    if new_username is not None:
+        session['username'] = new_username
+    app.logger.info("WebUI 凭据已修改")
+    return jsonify({'message': '用户名与密码已修改' if new_username is not None else '密码修改成功'})
 
 @app.route('/api/config/<config_type>', methods=['GET'])
 def get_config(config_type):

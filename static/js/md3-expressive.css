@@ -9,6 +9,18 @@
  *       全部尊重 prefers-reduced-motion。
  * ============================================================ */
 
+/* ---------- MiSans 全局字体（正文 / 界面） ---------- */
+@font-face { font-family: 'MiSans'; src: url('../fonts/MiSans-Thin.ttf')       format('truetype'); font-weight: 100; font-style: normal; font-display: swap; }
+@font-face { font-family: 'MiSans'; src: url('../fonts/MiSans-ExtraLight.ttf') format('truetype'); font-weight: 200; font-style: normal; font-display: swap; }
+@font-face { font-family: 'MiSans'; src: url('../fonts/MiSans-Light.ttf')      format('truetype'); font-weight: 300; font-style: normal; font-display: swap; }
+@font-face { font-family: 'MiSans'; src: url('../fonts/MiSans-Normal.ttf')     format('truetype'); font-weight: 350; font-style: normal; font-display: swap; }
+@font-face { font-family: 'MiSans'; src: url('../fonts/MiSans-Regular.ttf')    format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: 'MiSans'; src: url('../fonts/MiSans-Medium.ttf')     format('truetype'); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: 'MiSans'; src: url('../fonts/MiSans-Demibold.ttf')   format('truetype'); font-weight: 550; font-style: normal; font-display: swap; }
+@font-face { font-family: 'MiSans'; src: url('../fonts/MiSans-Semibold.ttf')   format('truetype'); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: 'MiSans'; src: url('../fonts/MiSans-Bold.ttf')       format('truetype'); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: 'MiSans'; src: url('../fonts/MiSans-Heavy.ttf')      format('truetype'); font-weight: 800; font-style: normal; font-display: swap; }
+
 /* ---------- 形状 / 排版 / 动效 token（与主题无关） ---------- */
 :root {
   --md3e-radius-card: 20px;
@@ -22,7 +34,7 @@
   --el-border-radius-round: var(--md3e-radius-pill);
   --el-border-radius-circle: 100%;
 
-  --md3e-sans: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --md3e-sans: 'MiSans', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   --md3e-mono: 'JetBrains Mono', 'Cascadia Mono', Consolas, 'SF Mono', Menlo, monospace;
 
   --md3e-rail-w: 84px;
@@ -694,6 +706,55 @@ input:-webkit-autofill:focus {
 .el-dialog__title { font-weight: 650; letter-spacing: .06em; color: var(--fg-0); }
 .el-select-dropdown, .el-popper { border-radius: var(--md3e-radius-menu) !important; }
 
+/* 安全提醒横幅（默认凭据强制改密）——沿用单色刻线语言，红色只用于警示 */
+.sec-banner {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  background: var(--ink-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--md3e-radius-input);
+  position: relative;
+}
+/* 四角刻线，呼应卡片切角质感 */
+.sec-banner::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--line-2), var(--line-2)) top left / 10px 1px,
+    linear-gradient(var(--line-2), var(--line-2)) top right / 10px 1px,
+    linear-gradient(var(--line-2), var(--line-2)) bottom left / 10px 1px,
+    linear-gradient(var(--line-2), var(--line-2)) bottom right / 10px 1px;
+  background-repeat: no-repeat;
+}
+.sec-banner-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: var(--md3e-danger);
+  box-shadow: 0 0 0 1px var(--md3e-danger);
+  animation: pulse 2.4s var(--ease-io) infinite;
+}
+.sec-banner-title {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: .06em;
+  color: var(--fg-0);
+  margin-bottom: 5px;
+}
+.sec-banner-msg {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--fg-2);
+}
+
 .el-table { background: transparent !important; }
 .el-table tr, .el-table th.el-table__cell { background: transparent !important; }
 .el-table th.el-table__cell {
@@ -828,7 +889,7 @@ input:-webkit-autofill:focus {
 .login-brand h1 {
   margin: 0;
   font: 650 27px/1.2 var(--md3e-sans);
-  letter-spacing: .3em;
+  letter-spacing: .15em;
   text-indent: .3em;              /* 抵消字距造成的视觉偏左 */
   color: var(--fg-0);
   animation: rise var(--dur-3) var(--ease) .06s both;
