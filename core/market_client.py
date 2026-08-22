@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, TypedDict
+from typing import TypedDict
 
 import requests
 
@@ -24,11 +24,9 @@ class PluginMarketClient:
     优先使用 Unisphere，失败时从 GitHub PluginIndex 获取
     """
 
-    def __init__(self, config: Dict):
+    def __init__(self, config: dict):
         self.config = config
-        self.plugins_index_repo = config.get(
-            "plugins_index_repo", "Unisphere-Platform/LunarXU"
-        )
+        self.plugins_index_repo = config.get("plugins_index_repo", "Unisphere-Platform/LunarXU")
         self.github_mirror = config.get("github_mirror", "").strip()
         self.github_pat = config.get("github_pat", "").strip()
         self.source_order = config.get("market_source_order", ["unisphere", "github"])
@@ -61,7 +59,7 @@ class PluginMarketClient:
         if self.github_pat:
             self._session.headers["Authorization"] = f"token {self.github_pat}"
 
-    def _fetch_plugins_from_github_index(self) -> List[Dict]:
+    def _fetch_plugins_from_github_index(self) -> list[dict]:
         """
         从 GitHub 仓库的 plugins.json 获取插件列表
         """
@@ -105,7 +103,7 @@ class PluginMarketClient:
             logger.warning(f"获取 plugins.json 失败: {e}")
             return []
 
-    def _fetch_unisphere_plugins(self) -> List[Dict]:
+    def _fetch_unisphere_plugins(self) -> list[dict]:
         """
         从 Unisphere 获取插件列表
         """
@@ -138,7 +136,7 @@ class PluginMarketClient:
 
         return plugins
 
-    def get_available_plugins(self, installed_plugin_names: set = None) -> List[Dict]:
+    def get_available_plugins(self, installed_plugin_names: set | None = None) -> list[dict]:
         """
         获取可用插件列表
 
@@ -147,7 +145,7 @@ class PluginMarketClient:
         2. 高优先级源的插件覆盖低优先级源的同名插件
         """
         installed_plugin_names = installed_plugin_names or set()
-        all_plugins: Dict[str, Dict] = {}
+        all_plugins: dict[str, dict] = {}
 
         for source in self.source_order:
             if source == "unisphere":
@@ -168,9 +166,7 @@ class PluginMarketClient:
                         all_plugins[pid] = p
                 logger.info(f"GitHub: {len(plugins)} 插件")
 
-        final_plugins = [
-            p for pid, p in all_plugins.items() if pid not in installed_plugin_names
-        ]
+        final_plugins = [p for pid, p in all_plugins.items() if pid not in installed_plugin_names]
 
         logger.info(f"最终可用插件: {len(final_plugins)} 个")
         return final_plugins
@@ -181,7 +177,7 @@ class PluginMarketClient:
             return f"{self.github_mirror}{base_url}"
         return base_url
 
-    def get_plugin_download_url(self, plugin_id: str, checksum: str = None) -> str:
+    def get_plugin_download_url(self, plugin_id: str, checksum: str | None = None) -> str:
         """
         获取插件的下载 URL
 
@@ -219,7 +215,7 @@ class PluginMarketClient:
 
         return download_url
 
-    def resolve_checksum(self, plugin_id: str) -> Optional[str]:
+    def resolve_checksum(self, plugin_id: str) -> str | None:
         """
         获取插件的 SHA256 校验和
         目前 Unisphere 会提供，GitHub 上暂时没有

@@ -1,6 +1,8 @@
 import asyncio
+import contextlib
 import json
-from typing import AsyncIterator, Dict, Any, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
@@ -19,10 +21,12 @@ class BaseTransport:
     async def connect(self, is_reconnect: bool = False) -> bool:
         raise NotImplementedError
 
-    async def listen(self) -> AsyncIterator[Dict[str, Any]]:
+    async def listen(self) -> AsyncIterator[dict[str, Any]]:
         raise NotImplementedError
 
-    async def send(self, data: Dict[str, Any], wait_for_response: bool = True) -> Optional[Dict[str, Any]]:
+    async def send(
+        self, data: dict[str, Any], wait_for_response: bool = True
+    ) -> dict[str, Any] | None:
         raise NotImplementedError
 
     async def close(self):
@@ -37,30 +41,35 @@ class MilkyTransport(BaseTransport):
     - 响应统一转为 OneBot 风格 {status, retcode, data/message}，供上层无差别判断
     """
 
-    def __init__(self, server_url: str, token: Optional[str] = None,
-                 max_retries: int = 5, request_timeout: float = 30.0):
-        self.server_url = server_url.rstrip('/')
+    def __init__(
+        self,
+        server_url: str,
+        token: str | None = None,
+        max_retries: int = 5,
+        request_timeout: float = 30.0,
+    ):
+        self.server_url = server_url.rstrip("/")
         self.token = token
         self.max_retries = max_retries
         self._request_timeout = request_timeout
         self.websocket = None
-        self._session: Optional[aiohttp.ClientSession] = None
-        self._listener_task: Optional[asyncio.Task] = None
+        self._session: aiohttp.ClientSession | None = None
+        self._listener_task: asyncio.Task | None = None
         self._message_queue: asyncio.Queue = asyncio.Queue()
         self._is_closing = False
 
     @property
     def _ws_url(self) -> str:
         parsed = urlparse(self.server_url)
-        scheme = 'wss' if parsed.scheme == 'https' else 'ws'
+        scheme = "wss" if parsed.scheme == "https" else "ws"
         netloc = parsed.netloc
-        if parsed.path not in ('', '/'):
-            netloc = parsed.netloc + parsed.path.rstrip('/')
+        if parsed.path not in ("", "/"):
+            netloc = parsed.netloc + parsed.path.rstrip("/")
         return f"{scheme}://{netloc}/event"
 
-    def _auth_headers(self) -> Dict[str, str]:
+    def _auth_headers(self) -> dict[str, str]:
         if self.token:
-            return {'Authorization': f'Bearer {self.token}'}
+            return {"Authorization": f"Bearer {self.token}"}
         return {}
 
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -72,7 +81,7 @@ class MilkyTransport(BaseTransport):
 
     async def connect(self, is_reconnect: bool = False) -> bool:
         retries = 0
-        max_attempts = self.max_retries if not is_reconnect else float('inf')
+        max_attempts = self.max_retries if not is_reconnect else float("inf")
 
         while retries < max_attempts:
             if self._is_closing:
@@ -81,19 +90,21 @@ class MilkyTransport(BaseTransport):
 
             try:
                 if is_reconnect:
-                    logger.warning(f"尝试重连 Milky 事件通道 {self._ws_url} (第 {retries + 1} 次重试)")
+                    logger.warning(
+                        f"尝试重连 Milky 事件通道 {self._ws_url} (第 {retries + 1} 次重试)"
+                    )
                 else:
                     logger.info(f"尝试连接 Milky 协议端事件通道 {self._ws_url}")
 
-                self.websocket = await websockets.connect(self._ws_url, additional_headers=self._auth_headers())
+                self.websocket = await websockets.connect(
+                    self._ws_url, additional_headers=self._auth_headers()
+                )
                 logger.success("Milky 事件通道连接成功")
 
                 if is_reconnect and self._listener_task and not self._listener_task.done():
                     self._listener_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await self._listener_task
-                    except asyncio.CancelledError:
-                        pass
 
                 self._listener_task = asyncio.create_task(self._listen_loop())
                 return True
@@ -105,7 +116,7 @@ class MilkyTransport(BaseTransport):
                 retries += 1
                 logger.error(f"连接 Milky 事件通道失败: {e}")
                 if retries < self.max_retries or is_reconnect:
-                    wait_time = min(2 ** retries, 60)
+                    wait_time = min(2**retries, 60)
                     logger.info(f"等待 {wait_time} 秒后重试...")
                     await asyncio.sleep(wait_time)
                 elif not is_reconnect:
@@ -165,13 +176,11 @@ class MilkyTransport(BaseTransport):
             logger.info("_listen_loop 结束。")
             if self._is_closing:
                 while not self._message_queue.empty():
-                    try:
+                    with contextlib.suppress(asyncio.QueueEmpty):
                         self._message_queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        pass
                 await self._message_queue.put(None)
 
-    async def listen(self) -> AsyncIterator[Dict[str, Any]]:
+    async def listen(self) -> AsyncIterator[dict[str, Any]]:
         try:
             while True:
                 try:
@@ -193,13 +202,15 @@ class MilkyTransport(BaseTransport):
 
     # ---------- API 调用 ----------
 
-    async def send(self, data: Dict[str, Any], wait_for_response: bool = True) -> Optional[Dict[str, Any]]:
-        action = data.get('action')
-        params = data.get('params', {})
+    async def send(
+        self, data: dict[str, Any], wait_for_response: bool = True
+    ) -> dict[str, Any] | None:
+        action = data.get("action")
+        params = data.get("params", {})
 
         if not action:
             logger.error("Milky API 调用缺少 action")
-            return {'status': 'failed', 'message': '缺少 action'}
+            return {"status": "failed", "message": "缺少 action"}
 
         if params is None:
             params = {}
@@ -210,35 +221,59 @@ class MilkyTransport(BaseTransport):
                 f"{self.server_url}/api/{action}",
                 json=params,
                 headers=self._auth_headers(),
-                timeout=aiohttp.ClientTimeout(total=self._request_timeout)
+                timeout=aiohttp.ClientTimeout(total=self._request_timeout),
             ) as resp:
                 if resp.status == 401:
-                    return {'status': 'failed', 'retcode': -401, 'message': '鉴权凭据未提供或不匹配 (HTTP 401)'}
+                    return {
+                        "status": "failed",
+                        "retcode": -401,
+                        "message": "鉴权凭据未提供或不匹配 (HTTP 401)",
+                    }
                 if resp.status == 404:
-                    return {'status': 'failed', 'retcode': -404, 'message': f'API 不存在 (HTTP 404): {action}'}
+                    return {
+                        "status": "failed",
+                        "retcode": -404,
+                        "message": f"API 不存在 (HTTP 404): {action}",
+                    }
                 if resp.status == 415:
-                    return {'status': 'failed', 'retcode': -415, 'message': 'POST Content-Type 不支持 (HTTP 415)'}
+                    return {
+                        "status": "failed",
+                        "retcode": -415,
+                        "message": "POST Content-Type 不支持 (HTTP 415)",
+                    }
                 try:
                     body = await resp.json()
                 except Exception:
-                    return {'status': 'failed', 'retcode': resp.status, 'message': f'协议端返回非 JSON 响应 (HTTP {resp.status})'}
+                    return {
+                        "status": "failed",
+                        "retcode": resp.status,
+                        "message": f"协议端返回非 JSON 响应 (HTTP {resp.status})",
+                    }
 
-            if body.get('status') == 'ok':
-                return {'status': 'ok', 'retcode': body.get('retcode', 0), 'data': body.get('data'),
-                        'raw_response': body}
+            if body.get("status") == "ok":
+                return {
+                    "status": "ok",
+                    "retcode": body.get("retcode", 0),
+                    "data": body.get("data"),
+                    "raw_response": body,
+                }
             else:
-                return {'status': 'failed', 'retcode': body.get('retcode'), 'message': body.get('message', '未知错误'),
-                        'raw_response': body}
+                return {
+                    "status": "failed",
+                    "retcode": body.get("retcode"),
+                    "message": body.get("message", "未知错误"),
+                    "raw_response": body,
+                }
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error(f"Milky API 调用 {action} 超时，参数: {params}")
-            raise TimeoutError(f"等待 Milky 协议端响应超时: {action}")
+            raise TimeoutError(f"等待 Milky 协议端响应超时: {action}") from None
         except aiohttp.ClientError as e:
             logger.error(f"Milky API 调用 {action} 网络错误: {e}")
-            return {'status': 'error', 'message': str(e)}
+            return {"status": "error", "message": str(e)}
         except Exception as e:
             logger.error(f"Milky API 调用 {action} 时发生错误: {e}")
-            return {'status': 'error', 'message': str(e)}
+            return {"status": "error", "message": str(e)}
 
     # ---------- 关闭 ----------
 
