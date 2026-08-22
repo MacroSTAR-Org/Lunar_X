@@ -1,2 +1,2 @@
-kMarketBaseUrl = 'https://unisphere.macrostar.top'
-kGithubRawBaseUrl = 'https://raw.githubusercontent.com'
+kMarketBaseUrl = "https://unisphere.macrostar.top"
+kGithubRawBaseUrl = "https://raw.githubusercontent.com"

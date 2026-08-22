@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
 """工具箱插件：SQLite 持久化（消息 + 定时任务）"""
+
 import os
 import sqlite3
 import time
@@ -8,11 +8,11 @@ from datetime import datetime
 # 数据库路径：Lunar_X/data/tools/tools.db
 # 与 bot.plugin_data_dir('tools') 指向同一处；用具名中间变量而不是
 # 嵌三层 dirname，插件目录层级变了也一眼看得出该改哪里
-_PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))            # plugins/tools
-_FRAMEWORK_ROOT = os.path.dirname(os.path.dirname(_PLUGIN_DIR))     # Lunar_X
-DATA_DIR = os.path.join(_FRAMEWORK_ROOT, 'data', 'tools')
-DB_PATH = os.path.join(DATA_DIR, 'tools.db')
-_LEGACY_DB = os.path.join(_FRAMEWORK_ROOT, 'data', 'tools.db')      # 旧位置
+_PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))  # plugins/tools
+_FRAMEWORK_ROOT = os.path.dirname(os.path.dirname(_PLUGIN_DIR))  # Lunar_X
+DATA_DIR = os.path.join(_FRAMEWORK_ROOT, "data", "tools")
+DB_PATH = os.path.join(DATA_DIR, "tools.db")
+_LEGACY_DB = os.path.join(_FRAMEWORK_ROOT, "data", "tools.db")  # 旧位置
 
 _conn = None
 
@@ -24,9 +24,10 @@ def get_conn():
         # 一次性迁移：把旧的 data/tools.db 搬进 data/tools/
         if not os.path.exists(DB_PATH) and os.path.exists(_LEGACY_DB):
             import shutil
+
             shutil.move(_LEGACY_DB, DB_PATH)
         _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        _conn.execute('''
+        _conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts INTEGER NOT NULL,
@@ -34,8 +35,8 @@ def get_conn():
                 group_id INTEGER,
                 user_id INTEGER NOT NULL,
                 text TEXT
-            )''')
-        _conn.execute('''
+            )""")
+        _conn.execute("""
             CREATE TABLE IF NOT EXISTS scheduled (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 group_id INTEGER NOT NULL,
@@ -43,7 +44,7 @@ def get_conn():
                 content TEXT NOT NULL,
                 due_ts INTEGER NOT NULL,
                 done INTEGER DEFAULT 0
-            )''')
+            )""")
         _conn.commit()
     return _conn
 
@@ -56,12 +57,15 @@ def save_message(event):
             return
         conn = get_conn()
         conn.execute(
-            'INSERT INTO messages (ts, scene, group_id, user_id, text) VALUES (?, ?, ?, ?, ?)',
-            (int(time.time()),
-             'group' if getattr(event, 'group_id', None) else 'private',
-             getattr(event, 'group_id', None),
-             event.user_id,
-             text[:500]))
+            "INSERT INTO messages (ts, scene, group_id, user_id, text) VALUES (?, ?, ?, ?, ?)",
+            (
+                int(time.time()),
+                "group" if getattr(event, "group_id", None) else "private",
+                getattr(event, "group_id", None),
+                event.user_id,
+                text[:500],
+            ),
+        )
         conn.commit()
     except Exception:
         pass
@@ -70,15 +74,15 @@ def save_message(event):
 def search_messages(keyword, group_id=None, limit=20):
     """按关键词搜索消息（可限定群）"""
     conn = get_conn()
-    sql = 'SELECT ts, user_id, text FROM messages WHERE text LIKE ?'
-    params = [f'%{keyword}%']
+    sql = "SELECT ts, user_id, text FROM messages WHERE text LIKE ?"
+    params = [f"%{keyword}%"]
     if group_id:
-        sql += ' AND group_id = ?'
+        sql += " AND group_id = ?"
         params.append(group_id)
-    sql += ' ORDER BY id DESC LIMIT ?'
+    sql += " ORDER BY id DESC LIMIT ?"
     params.append(limit)
     rows = conn.execute(sql, params).fetchall()
-    return [{'ts': r[0], 'user_id': r[1], 'text': r[2]} for r in rows]
+    return [{"ts": r[0], "user_id": r[1], "text": r[2]} for r in rows]
 
 
 def count_messages(days=7, group_id=None):
@@ -88,19 +92,21 @@ def count_messages(days=7, group_id=None):
     sql = "SELECT date(ts, 'unixepoch', 'localtime') AS d, COUNT(*) FROM messages WHERE ts >= ?"
     params = [since]
     if group_id:
-        sql += ' AND group_id = ?'
+        sql += " AND group_id = ?"
         params.append(group_id)
-    sql += ' GROUP BY d ORDER BY d DESC'
+    sql += " GROUP BY d ORDER BY d DESC"
     return conn.execute(sql, params).fetchall()
 
 
 # ---------- 定时任务持久化 ----------
 
+
 def add_scheduled(group_id, user_id, content, due_ts):
     conn = get_conn()
     cur = conn.execute(
-        'INSERT INTO scheduled (group_id, user_id, content, due_ts) VALUES (?, ?, ?, ?)',
-        (group_id, user_id, content, int(due_ts)))
+        "INSERT INTO scheduled (group_id, user_id, content, due_ts) VALUES (?, ?, ?, ?)",
+        (group_id, user_id, content, int(due_ts)),
+    )
     conn.commit()
     return cur.lastrowid
 
@@ -110,37 +116,46 @@ def load_pending_scheduled():
     conn = get_conn()
     now = int(time.time())
     rows = conn.execute(
-        'SELECT id, group_id, user_id, content, due_ts FROM scheduled WHERE done = 0 AND due_ts > ?',
-        (now,)).fetchall()
-    return [{'id': r[0], 'group_id': r[1], 'user_id': r[2], 'content': r[3], 'due_ts': r[4]} for r in rows]
+        "SELECT id, group_id, user_id, content, due_ts FROM scheduled WHERE done = 0 AND due_ts > ?",
+        (now,),
+    ).fetchall()
+    return [
+        {"id": r[0], "group_id": r[1], "user_id": r[2], "content": r[3], "due_ts": r[4]}
+        for r in rows
+    ]
 
 
 def list_scheduled(group_id=None):
     conn = get_conn()
-    sql = 'SELECT id, group_id, user_id, content, due_ts FROM scheduled WHERE done = 0'
+    sql = "SELECT id, group_id, user_id, content, due_ts FROM scheduled WHERE done = 0"
     params = []
     if group_id:
-        sql += ' AND group_id = ?'
+        sql += " AND group_id = ?"
         params.append(group_id)
-    sql += ' ORDER BY due_ts ASC LIMIT 20'
+    sql += " ORDER BY due_ts ASC LIMIT 20"
     rows = conn.execute(sql, params).fetchall()
-    return [{'id': r[0], 'group_id': r[1], 'user_id': r[2], 'content': r[3], 'due_ts': r[4]} for r in rows]
+    return [
+        {"id": r[0], "group_id": r[1], "user_id": r[2], "content": r[3], "due_ts": r[4]}
+        for r in rows
+    ]
 
 
 def cancel_scheduled(task_id, group_id=None):
     conn = get_conn()
     if group_id:
-        conn.execute('UPDATE scheduled SET done = 1 WHERE id = ? AND group_id = ?', (task_id, group_id))
+        conn.execute(
+            "UPDATE scheduled SET done = 1 WHERE id = ? AND group_id = ?", (task_id, group_id)
+        )
     else:
-        conn.execute('UPDATE scheduled SET done = 1 WHERE id = ?', (task_id,))
+        conn.execute("UPDATE scheduled SET done = 1 WHERE id = ?", (task_id,))
     conn.commit()
 
 
 def mark_scheduled_done(task_id):
     conn = get_conn()
-    conn.execute('UPDATE scheduled SET done = 1 WHERE id = ?', (task_id,))
+    conn.execute("UPDATE scheduled SET done = 1 WHERE id = ?", (task_id,))
     conn.commit()
 
 
 def fmt_time(ts):
-    return datetime.fromtimestamp(ts).strftime('%H:%M:%S')
+    return datetime.fromtimestamp(ts).strftime("%H:%M:%S")
