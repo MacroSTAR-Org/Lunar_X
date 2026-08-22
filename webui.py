@@ -16,9 +16,10 @@ import sys
 import re
 import psutil
 
-# 与 bot 端共用同一套插件配置读写逻辑，避免两边实现漂移
+# 多源插件市场支持
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core import plugin_config as pc
+from core.market_client import PluginMarketClient
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -284,7 +285,10 @@ def init_default_configs():
                 webui_config["github_pat"] = ""
                 updated = True
             if "plugins_index_repo" not in webui_config:
-                webui_config["plugins_index_repo"] = "MacroSTAR-Org/Unisphere"
+                webui_config["plugins_index_repo"] = "Unisphere-Platform/LunarXU"
+                updated = True
+            if "unisphere_api_path" not in webui_config:
+                webui_config["unisphere_api_path"] = "/api/v1"
                 updated = True
             if "username" not in webui_config:
                 webui_config["username"] = "lunarx"
@@ -1158,75 +1162,54 @@ def get_available_plugins():
     try:
         with open(WEBUI_JSON_PATH, 'r', encoding='utf-8') as f:
             webui_config = json.load(f)
-        
-        github_mirror = webui_config.get('github_mirror', '').strip()
-        github_pat = webui_config.get('github_pat', '').strip()
-        plugins_index_repo = webui_config.get('plugins_index_repo', 'MacroSTAR-Org/Unisphere')
-        
-        headers = {}
-        if github_pat:
-            headers['Authorization'] = f'token {github_pat}'
 
-        github_api_url = f"https://api.github.com/repos/{plugins_index_repo}/contents/"
-        
-        app.logger.info(f"Fetching available plugins from GitHub API: {github_api_url}")
-        response = requests.get(github_api_url, headers=headers, timeout=10)
-        
-        if response.status_code != 200:
-            if response.status_code == 403 and "rate limit exceeded" in response.text.lower():
-                error_msg = "GitHub API 速率限制已超出。请在WebUI配置中填写GitHub个人访问令牌 (PAT) 以提高速率限制。"
-                app.logger.error(error_msg)
-                return jsonify({'error': error_msg}), 403
-            else:
-                app.logger.error(f"GitHub API returned status {response.status_code}: {response.text}")
-                return jsonify({'error': f'Failed to fetch plugins from GitHub: {response.status_code} - {response.text}'}), 500
-        
-        items = response.json()
-        available_plugins = []
-        
-        installed_plugins_raw = get_plugins_list() 
+        app.logger.info("Initializing multi-source plugin market client")
+        market_client = PluginMarketClient(webui_config)
+
+        installed_plugins_raw = get_plugins_list()
         installed_plugin_names = {p['name'] for p in installed_plugins_raw}
-        
-        for item in items:
-            if item['type'] == 'dir':
-                plugin_name = item['name']
-                
-                if plugin_name in installed_plugin_names:
-                    continue
-                
-                raw_zip_url_base = f"https://github.com/{plugins_index_repo}/archive/refs/heads/main.zip"
-                plugin_download_url = f"{github_mirror}{raw_zip_url_base}" if github_mirror else raw_zip_url_base
 
-                raw_readme_url_base = f"https://raw.githubusercontent.com/{plugins_index_repo}/main/{plugin_name}/README.md"
-                readme_fetch_url = f"{github_mirror}{raw_readme_url_base}" if github_mirror else raw_readme_url_base
+        app.logger.info(f"Checking installed plugins: {len(installed_plugin_names)}")
 
-                description = "No description available"
-                try:
-                    readme_response = requests.get(readme_fetch_url, timeout=5)
-                    if readme_response.status_code == 200:
-                        desc_text = readme_response.text
-                        desc_text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', desc_text)
-                        desc_text = re.sub(r'#+\s*', '', desc_text)
-                        desc_text = ' '.join(desc_text.split()).strip()
-                        description = desc_text[:200] + "..." if len(desc_text) > 200 else desc_text
-                    else:
-                        app.logger.warning(f"Could not fetch README for {plugin_name} from {readme_fetch_url}: {readme_response.status_code}")
-                except requests.exceptions.RequestException as req_e:
-                    app.logger.warning(f"Error fetching README for {plugin_name}: {req_e}")
-                except Exception as ex:
-                    app.logger.warning(f"Error processing README for {plugin_name}: {ex}")
-                
-                available_plugins.append({
-                    'name': plugin_name,
-                    'description': description,
-                    'url': plugin_download_url,
-                    'path': plugin_name
-                })
-        
-        app.logger.info(f"Found {len(available_plugins)} available plugins")
+        available_plugins = market_client.get_available_plugins(installed_plugin_names)
+
+        app.logger.info(f"Found {len(available_plugins)} available plugins from all sources")
         return jsonify(available_plugins)
     except Exception as e:
         app.logger.error(f"Error getting available plugins: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/plugins/<plugin_id>', methods=['GET'])
+def get_plugin_detail(plugin_id: str):
+    """
+    获取单个插件的详细信息
+    支持多源插件查找
+    """
+    try:
+        with open(WEBUI_JSON_PATH, 'r', encoding='utf-8') as f:
+            webui_config = json.load(f)
+
+        app.logger.info(f"Getting plugin details: {plugin_id}")
+        market_client = PluginMarketClient(webui_config)
+
+        plugin_url = market_client.get_plugin_download_url(plugin_id)
+
+        checksum = market_client.resolve_checksum(plugin_id)
+
+        plugin_info = {
+            'id': plugin_id,
+            'name': plugin_id,
+            'version': '0.1.0',
+            'description': 'No description available',
+            'downloadUrl': plugin_url,
+            'sha256': checksum or ''
+        }
+
+        app.logger.info(f"Got plugin info: {plugin_info}")
+        return jsonify(plugin_info)
+    except Exception as e:
+        app.logger.error(f"Error getting plugin detail {plugin_id}: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 def _process_plugin_structure(plugin_name, extracted_plugin_root_path, log_callback):

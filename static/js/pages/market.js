@@ -52,24 +52,42 @@ window.Pages.Market = {
             </el-form-item>
           </el-col>
         </el-row>
-        <el-row :gutter="16">
-          <el-col :xs="24" :sm="8">
-            <el-form-item label="GitHub PAT（可选，提高 API 限额）">
-              <el-input v-model="wc.github_pat" show-password autocomplete="new-password"
-                        name="lx-github-pat" placeholder="github_pat_..." />
-            </el-form-item>
-          </el-col>
-          <el-col :xs="24" :sm="10">
-            <el-form-item label="插件索引仓库">
-              <el-input v-model="wc.plugins_index_repo" placeholder="MacroSTAR-Org/Unisphere" />
-            </el-form-item>
-          </el-col>
-          <el-col :xs="24" :sm="6" style="display:flex;align-items:flex-end">
-            <el-form-item label=" ">
-              <el-button type="primary" :loading="saving" @click="saveWebui">保存设置</el-button>
-            </el-form-item>
-          </el-col>
-        </el-row>
+<el-row :gutter="16">
+        <el-col :xs="24" :sm="8">
+          <el-form-item label="GitHub PAT（可选，提高 API 限额）">
+            <el-input v-model="wc.github_pat" show-password autocomplete="new-password"
+                      name="lx-github-pat" placeholder="github_pat_..." />
+          </el-form-item>
+        </el-col>
+        <el-col :xs="24" :sm="8">
+          <el-form-item label="插件索引仓库">
+            <el-input v-model="wc.plugins_index_repo" placeholder="Unisphere-Platform/LunarXU" />
+          </el-form-item>
+        </el-col>
+        <el-col :xs="24" :sm="8" style="display:flex;align-items:flex-end">
+          <el-form-item label=" ">
+            <el-button type="primary" :loading="saving" @click="saveWebui">保存设置</el-button>
+          </el-form-item>
+        </el-col>
+      </el-row>
+
+      <el-divider content-position="left">多源插件配置</el-divider>
+
+      <el-row :gutter="16">
+        <el-col :xs="24" :sm="8">
+          <el-form-item label="数据源优先级">
+            <el-select v-model="wc.market_source_order" style="width:100%"
+                      multiple allow-create collapse-tags collapse-tags-tooltip
+                      placeholder="选择数据源顺序（从左到右优先）">
+              <el-option label="Unisphere（推荐）" value="unisphere" />
+              <el-option label="GitHub PluginIndex" value="github" />
+            </el-select>
+            <div class="form-hint">
+              优先从 Unisphere 获取插件，失败时使用 GitHub PluginIndex
+            </div>
+          </el-form-item>
+        </el-col>
+      </el-row>
       </el-form>
     </el-card>
 
@@ -99,7 +117,7 @@ window.Pages.Market = {
 
     <el-dialog v-model="installVisible" title="安装插件" width="560px" :close-on-click-modal="false" append-to-body>
       <el-form label-position="top">
-        <el-form-item label="名称"><el-input v-model="form.name" readonly /></el-form-item>
+        <el-form-item label="名称"><el-input :value="form.name" readonly /></el-form-item>
         <el-form-item label="下载地址"><el-input v-model="form.url" readonly /></el-form-item>
         <el-form-item label="安装路径"><el-input v-model="form.path" readonly /></el-form-item>
       </el-form>
@@ -118,7 +136,14 @@ window.Pages.Market = {
     return {
       mirrors: GITHUB_MIRRORS,
       rawWebui: null,
-      wc: { use_pypi_mirror: false, pypi_mirror: '', github_mirror: '', github_pat: '', plugins_index_repo: '' },
+      wc: {
+        use_pypi_mirror: false,
+        pypi_mirror: '',
+        github_mirror: '',
+        github_pat: '',
+        plugins_index_repo: 'Unisphere-Platform/LunarXU',
+        market_source_order: ['unisphere', 'github']
+      },
       saving: false,
 
       available: [],
@@ -159,7 +184,8 @@ window.Pages.Market = {
           pypi_mirror: raw.pypi_mirror || '',
           github_mirror: raw.github_mirror || '',
           github_pat: raw.github_pat || '',
-          plugins_index_repo: raw.plugins_index_repo || '',
+          plugins_index_repo: raw.plugins_index_repo || 'Unisphere-Platform/LunarXU',
+          market_source_order: raw.market_source_order || ['unisphere', 'github']
         };
       } catch (e) {
         this.$message.error('加载插件源设置失败：' + e.message);
@@ -190,17 +216,17 @@ window.Pages.Market = {
       try {
         const data = await Api.get('/api/available_plugins');
         this.available = Array.isArray(data) ? data : [];
-        if (!this.available.length) this.$message.info('索引仓库里没有未安装的插件');
+        if (!this.available.length) this.$message.info('暂无可安装的插件，请检查插件源配置');
       } catch (e) {
         this.available = [];
-        this.$message.error(e.message);
+        this.$message.error('加载插件列表失败：' + e.message);
       } finally {
         this.loading = false;
       }
     },
 
     openInstall(row) {
-      this.form = { name: row.name, url: row.url, path: row.path };
+      this.form = { id: row.id, name: row.name, url: row.url, path: row.path };
       this.log = '';
       this.tail = '';
       this.percent = 0;
@@ -233,7 +259,7 @@ window.Pages.Market = {
       let finished = false;
       try {
         await Api.postStream('/api/plugins', {
-          name: this.form.name,
+          name: this.form.id,
           url: this.form.url,
           path: this.form.path,
           use_pypi_mirror: this.wc.use_pypi_mirror,
