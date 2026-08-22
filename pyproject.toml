@@ -3,36 +3,42 @@ name = "lunar-x"
 version = "0.1.0"
 description = "MacroSTAR Lunar_X — 多平台聊天机器人框架"
 readme = "README.md"
-license = "MIT"
+license = "GPL-3.0"
 requires-python = ">=3.13"
 
 dependencies = [
+    # 核心框架与 WebUI
     "aiohttp>=3.9",
     "flask>=3.0",
     "requests>=2.31",
     "psutil>=5.9",
     "websockets>=12.0",
+    # 配置、认证与 API
+    "cryptography>=42.0",
     "openai>=1.0",
     "pydantic>=2.0",
     "pyjwt>=2.8",
-    "cryptography>=42.0",
     "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
 full = [
+    # 第三方 API 与网络工具
     "google-generativeai>=0.5",
     "google-api-python-client>=2.0",
     "pygithub>=2.0",
     "httpx>=0.27",
+    # 机器人功能与终端输出
     "edge-tts>=6.1",
     "emoji>=2.0",
     "tabulate>=0.9",
     "tqdm>=4.66",
+    # 图像与数值处理
     "numpy>=1.26",
     "pillow>=10.0",
 ]
 windows = [
+    # Windows 桌面 WebUI 与系统集成
     "PySide6>=6.6",
     "PySide6-Fluent-Widgets>=1.5",
     "pywin32>=306",
