@@ -21,7 +21,7 @@ class BaseTransport:
     async def connect(self, is_reconnect: bool = False) -> bool:
         raise NotImplementedError
 
-    async def listen(self) -> AsyncIterator[dict[str, Any]]:
+    def listen(self) -> AsyncIterator[dict[str, Any]]:
         raise NotImplementedError
 
     async def send(

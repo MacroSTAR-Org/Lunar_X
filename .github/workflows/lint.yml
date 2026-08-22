@@ -1,0 +1,47 @@
+name: Lint
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Run lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Run lint
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            echo '$ uv sync --locked --dev'
+            uv sync --locked --dev
+            echo
+            echo '$ uv run lint'
+            uv run lint
+          } 2>&1 | tee lint-output.txt
+
+      - name: Upload lint output
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: lint-output.txt
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,156 @@
+name: Report lint results
+
+on:
+  workflow_run:
+    workflows: ["Lint"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: lint-report-branch-${{ github.event.workflow_run.head_branch || github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    if: ${{ github.event.workflow_run.event == 'pull_request' && (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download lint output
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: lint-report
+          path: lint-report
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create or update PR comment
+        uses: actions/github-script@v7
+        env:
+          LINT_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        with:
+          script: |
+            const fs = require("fs");
+
+            const marker = "<!-- lunar-x-lint-report -->";
+            const run = context.payload.workflow_run;
+            const pullRequests = run.pull_requests ?? [];
+
+            if (pullRequests.length === 0) {
+              core.info("This workflow run is not associated with a pull request.");
+              return;
+            }
+
+            const pullRequestNumber = pullRequests[0].number;
+            let rawOutput = "";
+
+            try {
+              rawOutput = fs.readFileSync("lint-report/lint-output.txt", "utf8").trim();
+            } catch {
+              core.warning("lint-output.txt was not available.");
+            }
+
+            const findings = [];
+            for (const line of rawOutput.split(/\r?\n/)) {
+              const match = line.match(
+                /^(.+?):(\d+):(\d+)(?::\s*([A-Za-z]+\d+)\s+(.*)|\s+-\s+(.*))$/,
+              );
+
+              if (!match) {
+                continue;
+              }
+
+              findings.push({
+                file: match[1],
+                line: match[2],
+                column: match[3],
+                rule: match[4] ?? "basedpyright",
+                message: (match[5] ?? match[6]).trim(),
+              });
+            }
+
+            const safeForCodeBlock = (text) =>
+              text.replaceAll("```", "``\u200b`");
+
+            let body;
+            if (process.env.LINT_CONCLUSION === "success") {
+              body = `${marker}
+            ## ✅ Lint 已通过
+
+            本次 PR 的 \`uv run lint\` 检查已通过。`;
+            } else {
+              const maxFindings = 200;
+              const displayedFindings = findings.slice(0, maxFindings);
+              const groupedFindings = new Map();
+
+              for (const finding of displayedFindings) {
+                if (!groupedFindings.has(finding.file)) {
+                  groupedFindings.set(finding.file, []);
+                }
+                groupedFindings
+                  .get(finding.file)
+                  .push(
+                    `  L${finding.line}:C${finding.column} [${finding.rule}] ${finding.message}`,
+                  );
+              }
+
+              const formattedFindings = [...groupedFindings.entries()]
+                .map(([file, fileFindings]) => [file, ...fileFindings].join("\n"))
+                .join("\n");
+              const omittedCount = findings.length - displayedFindings.length;
+              const details =
+                formattedFindings ||
+                rawOutput ||
+                "未能读取 lint 输出，请打开上方的 Lint workflow 查看详细日志。";
+              const omittedNotice =
+                omittedCount > 0
+                  ? `\n\n（还有 ${omittedCount} 条错误未显示，请查看 workflow 日志。）`
+                  : "";
+
+              body = `${marker}
+            ## ❌ Lint 未通过
+
+            PR 的 \`uv run lint\` 检查失败，请修复以下问题后再合并。
+
+            \`\`\`text
+            ${safeForCodeBlock(details)}${omittedNotice}
+            \`\`\`
+
+            推送新的 commit 后，Action 会更新这条评论，不会重复创建。`;
+            }
+
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequestNumber,
+                per_page: 100,
+              },
+            );
+            const existingComment = comments.find(
+              (comment) =>
+                comment.user?.type === "Bot" && comment.body?.includes(marker),
+            );
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body,
+              });
+              core.info(`Updated lint report comment ${existingComment.id}.`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequestNumber,
+                body,
+              });
+              core.info("Created lint report comment.");
+            }

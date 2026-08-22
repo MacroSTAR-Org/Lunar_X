@@ -8,9 +8,10 @@ from typing import Any
 import websockets
 
 from .logger import logger
+from .transport import BaseTransport
 
 
-class WebSocketConnection:
+class WebSocketConnection(BaseTransport):
     def __init__(
         self,
         ws_url: str,
@@ -22,7 +23,7 @@ class WebSocketConnection:
         self.token = token
         self.max_retries = max_retries
         self.websocket = None
-        self._pending_requests: dict[str, asyncio.Future] = {}
+        self._pending_requests: dict[str, asyncio.Future[Any]] = {}
         self._request_timeout = request_timeout
         self._listener_task: asyncio.Task | None = None
         self._message_queue: asyncio.Queue = asyncio.Queue()
@@ -216,6 +217,7 @@ class WebSocketConnection:
 
             if wait_for_response:
                 try:
+                    assert future is not None
                     response = await asyncio.wait_for(future, timeout=self._request_timeout)
                     return response
                 except TimeoutError:
@@ -232,6 +234,7 @@ class WebSocketConnection:
                 wait_for_response
                 and request_id
                 and request_id in self._pending_requests
+                and future is not None
                 and not future.done()
             ):
                 self._pending_requests.pop(request_id).set_exception(e)
@@ -242,6 +245,7 @@ class WebSocketConnection:
                 wait_for_response
                 and request_id
                 and request_id in self._pending_requests
+                and future is not None
                 and not future.done()
             ):
                 future.cancel("发送被中断")
@@ -252,6 +256,7 @@ class WebSocketConnection:
                 wait_for_response
                 and request_id
                 and request_id in self._pending_requests
+                and future is not None
                 and not future.done()
             ):
                 self._pending_requests.pop(request_id).set_exception(e)
@@ -261,6 +266,7 @@ class WebSocketConnection:
                 wait_for_response
                 and request_id
                 and request_id in self._pending_requests
+                and future is not None
                 and future.done()
             ):
                 self._pending_requests.pop(request_id, None)

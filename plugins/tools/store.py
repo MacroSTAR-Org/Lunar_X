@@ -75,7 +75,7 @@ def search_messages(keyword, group_id=None, limit=20):
     """按关键词搜索消息（可限定群）"""
     conn = get_conn()
     sql = "SELECT ts, user_id, text FROM messages WHERE text LIKE ?"
-    params = [f"%{keyword}%"]
+    params: list[str | int] = [f"%{keyword}%"]
     if group_id:
         sql += " AND group_id = ?"
         params.append(group_id)

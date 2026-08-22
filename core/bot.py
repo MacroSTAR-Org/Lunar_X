@@ -4,7 +4,8 @@ import json
 import os
 import sys
 import time
-from typing import Any
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 from core.diy import DiyAPI
 
@@ -23,12 +24,14 @@ from .events import (
 from .logger import logger
 from .message import (
     BaseSegment,
-    ForwardNodeSegment,
     MessageBuilder,
     ReplyUtils,
     TextSegment,
 )
 from .plugin_manager import PluginManager
+
+if TYPE_CHECKING:
+    from .transport import BaseTransport
 
 
 class LunarBot:
@@ -36,6 +39,7 @@ class LunarBot:
         self.config = config
         logger.configure_from_config(config)
         self.protocol_name = config.get("protocol", "onebot_v11")
+        self.connection: BaseTransport
         if self.protocol_name == "milky":
             from .milky_adapter import MilkyAdapter
             from .transport import MilkyTransport
@@ -124,7 +128,7 @@ class LunarBot:
     async def gen_message(self, data: dict | list) -> list[BaseSegment]:
         return self.msg.gen_message(data)
 
-    def _convert_segments_to_dicts(self, data: dict | list | Any) -> dict | list | Any:
+    def _convert_segments_to_dicts(self, data: Any) -> Any:
         if isinstance(data, BaseSegment):
             return data.to_dict()
         elif isinstance(data, dict):
@@ -267,7 +271,7 @@ class LunarBot:
             "消息统计": self._message_stats,
         }
 
-    def _check_permission(self, user_id: int, required_level: str = "manager") -> bool:
+    def _check_permission(self, user_id: int | None, required_level: str = "manager") -> bool:
         root_user = self.config.get("root_user")
         if user_id == root_user:
             return True
@@ -460,7 +464,7 @@ class LunarBot:
                 restart_time = time.time() - restart_info["start_time"]
                 success_message = f"重启成功，用时 {restart_time:.2f} 秒"
 
-                if hasattr(self, "connection") and self.connection.websocket:
+                if getattr(self.connection, "websocket", None):
                     if restart_info.get("message_type") == "group" and "group_id" in restart_info:
                         await self.send(success_message, group_id=restart_info["group_id"])
                         logger.info(f"向群 {restart_info['group_id']} 发送重启成功消息")
@@ -497,7 +501,9 @@ class LunarBot:
             logger.info("事件监听已停止")
             await self._handle_plugin_event(Events.LunarStopListen())
 
-    def _format_message_for_log(self, message_segments: list[dict | BaseSegment]) -> str:
+    def _format_message_for_log(
+        self, message_segments: Sequence[dict[str, Any] | BaseSegment]
+    ) -> str:
         log_parts = []
 
         for segment in message_segments:
@@ -545,7 +551,7 @@ class LunarBot:
 
     async def send_message_segments(
         self,
-        message_segments: list[dict | BaseSegment],
+        message_segments: Sequence[dict[str, Any] | BaseSegment],
         user_id: int | None = None,
         group_id: int | None = None,
     ) -> bool:
@@ -609,6 +615,7 @@ class LunarBot:
         user_id: int | None = None,
         group_id: int | None = None,
     ) -> bool:
+        message_segments: list[dict[str, Any] | BaseSegment]
         if isinstance(message, str):
             message_segments = [self.msg.text(message)]
         elif isinstance(message, BaseSegment):
@@ -620,7 +627,7 @@ class LunarBot:
             else:
                 message_segments = [message]
         elif isinstance(message, list):
-            processed_segments = []
+            processed_segments: list[dict[str, Any] | BaseSegment] = []
             for item in message:
                 if isinstance(item, BaseSegment):
                     processed_segments.append(item)
@@ -680,7 +687,7 @@ class LunarBot:
 
     async def send_forward_msg(
         self,
-        messages: list[dict | ForwardNodeSegment],
+        messages: Sequence[dict[str, Any] | BaseSegment],
         group_id: int | None = None,
         user_id: int | None = None,
     ):
@@ -738,7 +745,6 @@ class LunarBot:
 
             if hasattr(self, "connection") and self.connection:
                 await self.connection.close()
-                self.connection = None
 
             if hasattr(self, "plugin_manager") and hasattr(
                 self.plugin_manager, "stop_file_monitoring"

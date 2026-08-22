@@ -109,7 +109,7 @@ class FileSegment(BaseSegment):
 
 class ReplySegment(BaseSegment):
     def __init__(self, message_id: int | str, quoted_segments: list | None = None):
-        data = {"id": str(message_id)}
+        data: dict[str, Any] = {"id": str(message_id)}
         if quoted_segments:
             # Milky 协议 reply 段自带被引用消息内容（segments），随事件透传
             data["quoted_segments"] = quoted_segments
@@ -121,13 +121,20 @@ class ReplySegment(BaseSegment):
 
 
 class ForwardNodeSegment(BaseSegment):
-    def __init__(self, user_id: int | str, nickname: str, content: list[BaseSegment]):
+    def __init__(
+        self,
+        user_id: int | str,
+        nickname: str,
+        content: list[BaseSegment | dict[str, Any]],
+    ):
         super().__init__(
             "node",
             {
                 "user_id": str(user_id),
                 "nickname": nickname,
-                "content": [seg.to_dict() for seg in content],
+                "content": [
+                    seg.to_dict() if isinstance(seg, BaseSegment) else seg for seg in content
+                ],
             },
         )
 
@@ -217,7 +224,7 @@ class MessageBuilder:
         self, user_id: int, nickname: str, content: str | list[BaseSegment | dict]
     ) -> ForwardNodeSegment:
         if isinstance(content, str):
-            message_content = [self.text(content)]
+            message_content: list[BaseSegment | dict[str, Any]] = [self.text(content)]
         elif isinstance(content, list):
             message_content = []
             for item in content:

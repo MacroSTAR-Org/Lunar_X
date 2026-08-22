@@ -11,6 +11,7 @@ class Event:
         self.raw_data = data.copy()
         self.time = data.get("time")
         self.self_id = data.get("self_id")
+        self.user_id: int | None = data.get("user_id")
         self.post_type = data.get("post_type")
         self.is_command: bool = False
         self.command: str | None = None
@@ -28,14 +29,8 @@ class Event:
         # 针对一些特殊或常用的键进行映射
         if key == "type":  # 兼容旧插件可能直接 event.get('type')
             return self.post_type
-        if key == "message_type" and hasattr(self, "message_type"):
-            return self.message_type
-        if key == "notice_type" and hasattr(self, "notice_type"):
-            return self.notice_type
-        if key == "request_type" and hasattr(self, "request_type"):
-            return self.request_type
-        if key == "meta_event_type" and hasattr(self, "meta_event_type"):
-            return self.meta_event_type
+        if key in {"message_type", "notice_type", "request_type", "meta_event_type"}:
+            return getattr(self, key, default)
         if key == "text" and isinstance(self, MessageEvent):  # 兼容 event.get('text')
             return self.get_text()
         if key == "raw_event":  # 兼容 event.get('raw_event')
@@ -330,11 +325,11 @@ class GroupHonorNoticeEvent(NoticeEvent):
         super().__init__(data)
         self.group_id = data.get("group_id")
         self.user_id = data.get("user_id")
-        self.honor_type = data.get("honor_type")
+        self.honor_type: str | None = data.get("honor_type")
 
     def log_event(self):
         honor_map = {"talkative": "龙王", "performer": "群聊之火", "emotion": "快乐源泉"}
-        honor_name = honor_map.get(self.honor_type, self.honor_type)
+        honor_name = honor_map.get(self.honor_type or "", self.honor_type)
         logger.info(f"用户{self.user_id} 在群{self.group_id} 获得了 {honor_name} 荣誉")
 
     def __str__(self):

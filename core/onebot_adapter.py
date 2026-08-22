@@ -1,5 +1,7 @@
+from collections.abc import Sequence
 from typing import Any
 
+from .events import Event, EventFactory
 from .logger import logger
 from .message import BaseSegment
 
@@ -14,9 +16,13 @@ class OneBotAdapter:
     def __init__(self, bot):
         self.bot = bot
 
+    def parse_event(self, raw: dict[str, Any]) -> Event:
+        """解析 OneBot 事件，和 Milky 适配器提供统一接口。"""
+        return EventFactory.create_event(raw, self.bot.msg)
+
     async def send_message(
         self,
-        message_segments: list[dict | BaseSegment],
+        message_segments: Sequence[dict[str, Any] | BaseSegment],
         user_id: int | None = None,
         group_id: int | None = None,
     ) -> Any:
@@ -52,7 +58,7 @@ class OneBotAdapter:
 
     async def send_forward(
         self,
-        messages: list[dict | BaseSegment],
+        messages: Sequence[dict[str, Any] | BaseSegment],
         group_id: int | None = None,
         user_id: int | None = None,
     ) -> bool:
@@ -71,7 +77,7 @@ class OneBotAdapter:
             else:
                 logger.warning(f"不支持的转发消息节点类型，跳过: {type(msg)}")
 
-        params = {"messages": formatted_messages}
+        params: dict[str, Any] = {"messages": formatted_messages}
 
         if group_id:
             params["group_id"] = group_id
