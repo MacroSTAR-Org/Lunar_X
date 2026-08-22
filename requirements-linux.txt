@@ -1,6 +1,0 @@
-# Linux 精简依赖包（专属）
-flask==3.1.2
-aiohttp==3.12.15
-websockets==15.0.1
-psutil==7.0.0
-requests==2.32.5
