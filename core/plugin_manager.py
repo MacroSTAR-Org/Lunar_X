@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import importlib
+import importlib.util
 import os
 import re
 import sys
@@ -175,6 +176,11 @@ class PluginManager:
                     self.failed_plugins[name] = error_msg
                     logger.warning(f"插件 {name} {error_msg}，跳过加载", logger_name="LunarPlugins")
                     continue
+                if spec.loader is None:
+                    error_msg = f"无法为 {name} 创建模块加载器"
+                    self.failed_plugins[name] = error_msg
+                    logger.warning(f"插件 {name} {error_msg}，跳过加载", logger_name="LunarPlugins")
+                    continue
 
                 modules_before = set(sys.modules)
                 module = importlib.util.module_from_spec(spec)
@@ -227,7 +233,7 @@ class PluginManager:
                     logger_name="LunarPlugins",
                 )
             finally:
-                if path_inserted:
+                if path_inserted and plugin_dir is not None:
                     with contextlib.suppress(ValueError):
                         sys.path.remove(plugin_dir)
 
@@ -239,7 +245,7 @@ class PluginManager:
 
     @staticmethod
     def _collect_owned_submodules(
-        modules_before: set, plugin_dir: str, plugin_name: str
+        modules_before: set, plugin_dir: str | None, plugin_name: str
     ) -> list[str]:
         """挑出本次 exec 新增的、且源文件位于该插件目录内的模块名"""
         if not plugin_dir:

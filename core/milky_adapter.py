@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Any
 
 from .events import EventFactory
@@ -214,7 +215,7 @@ class MilkyAdapter:
 
     # ============ 发送消息 ============
 
-    def _internal_to_milky_segments(self, segments: list) -> list[dict]:
+    def _internal_to_milky_segments(self, segments: Sequence) -> list[dict]:
         """内部消息段（BaseSegment / dict）→ Milky OutgoingSegment 列表"""
         result = []
         for s in segments:
@@ -253,7 +254,10 @@ class MilkyAdapter:
         return result
 
     async def send_message(
-        self, message_segments: list, user_id: int | None = None, group_id: int | None = None
+        self,
+        message_segments: Sequence,
+        user_id: int | None = None,
+        group_id: int | None = None,
     ):
         api_segments = self._internal_to_milky_segments(message_segments)
         if group_id:
@@ -277,7 +281,10 @@ class MilkyAdapter:
             return False
 
     async def send_forward(
-        self, messages: list, group_id: int | None = None, user_id: int | None = None
+        self,
+        messages: Sequence,
+        group_id: int | None = None,
+        user_id: int | None = None,
     ) -> bool:
         """合并转发：Milky 无独立 API，通过 send_*_message + forward 段实现"""
         forward_data = []

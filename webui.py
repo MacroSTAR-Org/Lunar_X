@@ -1427,6 +1427,8 @@ def install_plugin():
                         bufsize=1,
                     )
 
+                    assert process.stdout is not None
+                    assert process.stderr is not None
                     for line in process.stdout:
                         yield from log_progress(f"PIP: {line.strip()}")
                     for line in process.stderr:
