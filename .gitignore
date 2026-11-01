@@ -46,3 +46,6 @@ plugins/*/config.json
 .idea/
 .DS_Store
 Thumbs.db
+
+# WorkBuddy 会话工作目录（AI 协作的内部记忆，不属于项目）
+.workbuddy/

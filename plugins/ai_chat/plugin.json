@@ -1,9 +1,9 @@
 {
   "name": "ai_chat",
   "display_name": "AI 对话",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "author": "MacroSTAR",
-  "description": "接入 OpenAI 兼容接口的群聊 AI 助手，支持命令、@ 唤醒、名字唤醒与人格设定",
+  "description": "多智能体 AI 群友：旁听群聊、长期记忆、图片理解、规划器决定何时开口，也保留单模型直答模式",
   "config": [
     {
       "key": "enabled",
@@ -112,6 +112,90 @@
       "rows": 5,
       "default": "",
       "hint": "优先级高于上面的系统提示词"
-    }
+    },
+
+    {
+      "key": "mode",
+      "label": "运行模式",
+      "type": "select",
+      "options": [
+        { "value": "agent", "label": "agent（多智能体：旁听/规划/记忆，默认）" },
+        { "value": "classic", "label": "classic（单模型直答，原始行为）" }
+      ],
+      "default": "agent",
+      "hint": "agent 模式下机器人会旁听群聊并自行判断何时开口"
+    },
+    {
+      "key": "agent.fallback_classic",
+      "label": "agent 故障时降级 classic",
+      "type": "bool",
+      "default": true,
+      "hint": "多智能体管线调用失败时自动回退单模型直答，保证不失联"
+    },
+
+    { "key": "listen.enabled", "label": "旁听群聊", "type": "bool", "default": true,
+      "hint": "构建群共享上下文；只存内存，重启即清，绝不落盘" },
+    { "key": "listen.max_entries", "label": "时间线容量（条）", "type": "int", "default": 30, "min": 10, "max": 100 },
+    { "key": "listen.ttl_minutes", "label": "时间线保留（分钟）", "type": "int", "default": 120, "min": 10, "max": 360 },
+    { "key": "listen.max_chars", "label": "注入上下文上限（字符）", "type": "int", "default": 2500, "min": 500, "max": 8000,
+      "hint": "每次请求带入的旁听文本预算，控制 token 成本" },
+
+    { "key": "planner.enabled", "label": "启用规划器", "type": "bool", "default": true,
+      "hint": "关闭后 agent 模式只保留直接触发，不主动判断要不要接话" },
+    { "key": "planner.model", "label": "规划器模型", "type": "string", "default": "",
+      "hint": "留空 = 主模型；规划只需要便宜快的模型，建议单独配一个" },
+    { "key": "planner.quiet_seconds", "label": "防抖静默期（秒）", "type": "int", "default": 20, "min": 5, "max": 300,
+      "hint": "群里安静这么久后才把攒下的消息交给规划器" },
+    { "key": "planner.batch_max", "label": "批量审查条数", "type": "int", "default": 12, "min": 3, "max": 50,
+      "hint": "攒够这个条数立即审查，不等静默" },
+    { "key": "planner.max_wait_seconds", "label": "最长等待（秒）", "type": "int", "default": 120, "min": 30, "max": 600,
+      "hint": "群里一直热闹时的兜底审查间隔" },
+    { "key": "planner.max_context_chars", "label": "规划上下文上限（字符）", "type": "int", "default": 3000, "min": 1000, "max": 10000 },
+    { "key": "replier.model", "label": "回复器模型", "type": "string", "default": "",
+      "hint": "留空 = 主模型" },
+
+    { "key": "vision.enabled", "label": "图片理解", "type": "bool", "default": false,
+      "hint": "需要模型支持看图（deepseek-chat 不支持；可用 qwen-vl、gpt-4o-mini 等）" },
+    { "key": "vision.model", "label": "看图模型", "type": "string", "default": "",
+      "hint": "留空 = 主模型；必须支持 vision" },
+    { "key": "vision.max_images", "label": "单次最多看几张图", "type": "int", "default": 2, "min": 1, "max": 4 },
+    { "key": "vision.max_image_mb", "label": "单图大小上限（MB）", "type": "int", "default": 5, "min": 1, "max": 10 },
+
+    { "key": "memory.enabled", "label": "长期记忆（落盘）", "type": "bool", "default": false,
+      "hint": "默认关闭；开启后才会把从对话中抽取的用户事实写入 data/ai_chat/memory.db" },
+    { "key": "memory.extract_model", "label": "记忆抽取模型", "type": "string", "default": "",
+      "hint": "留空 = 主模型；抽取在后台异步跑，建议配便宜模型" },
+    { "key": "memory.retention_days", "label": "记忆保留天数", "type": "int", "default": 90, "min": 0, "max": 365,
+      "hint": "按最近提及时间计；0 = 永久保留" },
+    { "key": "memory.max_per_user", "label": "每人记忆条数上限", "type": "int", "default": 100, "min": 10, "max": 500 },
+
+    { "key": "style.enabled", "label": "拟人化风格层", "type": "bool", "default": false,
+      "hint": "打字延迟 + 按标点分段发送 + 口语化约束；关闭时回复单条直发" },
+    { "key": "style.max_segment_chars", "label": "分段长度上限（字）", "type": "int", "default": 80, "min": 20, "max": 300 },
+    { "key": "style.face_chance", "label": "表情概率（0~1）", "type": "number", "default": 0, "min": 0, "max": 1, "step": 0.05,
+      "hint": "每次回复随机带一个小黄脸的概率" },
+    { "key": "style.quote_fewshot", "label": "语录做说话风格示例", "type": "bool", "default": false,
+      "hint": "从群语录库随机取几条注入提示词（只读，不改语录库）" },
+
+    { "key": "react.poke_back", "label": "被戳回戳", "type": "bool", "default": false },
+    { "key": "react.recall_tease", "label": "撤回调侃", "type": "bool", "default": false,
+      "hint": "只引用内存里旁听到的原文，重启后查不到就沉默" },
+    { "key": "react.welcome", "label": "入群欢迎", "type": "bool", "default": false },
+    { "key": "react.welcome_templates", "label": "欢迎模板", "type": "string_list",
+      "default": ["欢迎 {name} 入群～", "新朋友 {name} 来了，随便坐", "欢迎 {name}！记得看群公告哦"],
+      "hint": "每行一个，{name} 会替换成新人昵称" },
+
+    { "key": "proactive.mode", "label": "主动行为档位", "type": "select",
+      "options": [
+        { "value": "off", "label": "off：完全被动" },
+        { "value": "event", "label": "event：事件反应 + 被间接提及按概率接话（默认）" },
+        { "value": "event+timer", "label": "event+timer：额外允许低频主动插话" }
+      ],
+      "default": "event",
+      "hint": "off/event 档都不会主动开话题；event+timer 有每日上限和静音时段保护" },
+    { "key": "proactive.chime_chance", "label": "被间接提及的接话概率", "type": "number", "default": 0.3, "min": 0, "max": 1, "step": 0.05,
+      "hint": "消息中间（非开头）出现唤醒词时接话的概率，每群 10 分钟冷却" },
+    { "key": "proactive.quiet_hours", "label": "静音时段", "type": "string", "default": "01:00-08:00",
+      "hint": "此时间段内不主动插话；格式 HH:MM-HH:MM，留空 = 不静音" }
   ]
 }

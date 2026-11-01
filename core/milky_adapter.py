@@ -212,6 +212,18 @@ class MilkyAdapter:
 
     def __init__(self, bot):
         self.bot = bot
+        # 已告警过的未知事件类型：每类只 warning 一次，
+        # 否则协议端一发一个新事件，日志就被刷屏了
+        self._warned_unmapped: set[str] = set()
+
+    def _warn_unmapped(self, event_type: str | None) -> None:
+        if not event_type or event_type in self._warned_unmapped:
+            return
+        self._warned_unmapped.add(event_type)
+        logger.warning(
+            f"Milky 事件 {event_type} 尚无结构化映射，已按通用通知事件透传"
+            f"（原始数据保留在 event.raw_data）"
+        )
 
     # ============ 发送消息 ============
 
@@ -600,9 +612,12 @@ class MilkyAdapter:
                 "post_type": "notice",
                 "notice_type": "notify",
                 "sub_type": "poke",
+                # 私聊戳一戳没有群，group_id 固定 0 作为"私聊戳"的判别依据
                 "group_id": 0,
-                "user_id": d.get("user_id"),
-                "target_id": 0,
+                # 字段名与 group_nudge 对齐（sender_id / receiver_id）：
+                # 之前取 user_id、target_id 写死 0，导致"谁戳了谁"在私聊场景全丢
+                "user_id": d.get("sender_id"),
+                "target_id": d.get("receiver_id"),
             }
 
         if event_type == "friend_request":
@@ -656,4 +671,5 @@ class MilkyAdapter:
         # 其余事件类型（peer_pin_change / group_message_reaction / bot_offline /
         # group_name_change / group_essence_message_change / friend_file_upload ...）：
         # 无对应内部事件类，映射为基类 NoticeEvent，原始数据保留（兼容 Milky 规定：未知事件不报错）
+        self._warn_unmapped(event_type)
         return {**base, "post_type": "notice", "notice_type": event_type}
