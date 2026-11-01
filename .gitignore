@@ -15,10 +15,29 @@ data/
 restart_info.json
 
 # 本地配置（含密钥，勿提交）
+# 这些文件只存在于项目根目录，用前导 / 锚定，
+# 免得把 examples/ 下的同名模板一起误伤。
+#
+# config.json 是主配置：协议端地址、token、超级用户等都在里面。
+# 首次启动 webui.py 会自动生成默认配置，也可从 config.example.json 复制。
+/config.json
+# appsettings.json 是 OneBot 协议端（Lagrange.OneBot）的配置，含 AccessToken，
+# 首次启动 webui.py 会自动生成，绝不能进仓库
+/appsettings.json
 # webui.json 是运行时状态：面板账号密码哈希 + 会话签名密钥，
 # 首次启动 webui.py 会自动生成，绝不能进仓库
-webui.json
-webui.json.local
+/webui.json
+/webui.json.local
+# 首次启动生成的随机登录密码（登录后改密会自动删除）
+/webui.initial_password
+# 管理员名单 / 运行时 PID，按环境生成，不进仓库
+/admin114.json
+run/
+# 本地测试工具缓存
+.uvcache/
+.uvtmp/
+.uvtools/
+.tmp_test/
 # 插件私有配置，常含 API Key；缺失时框架会用 plugin.json 的 default 兜底
 plugins/*/config.json
 

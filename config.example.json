@@ -1,0 +1,14 @@
+{
+  "protocol": "milky",
+  "milky_server": "http://127.0.0.1:3010",
+  "milky_token": "",
+  "ws_server": "ws://127.0.0.1:3803",
+  "token": "",
+  "bot_name": "Lunar X",
+  "bot_name_en": "Lunar",
+  "root_user": 0,
+  "trigger_keyword": "$",
+  "auto_reload_plugins": true,
+  "log_level": "INFO",
+  "log_save_levels": ["DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"]
+}

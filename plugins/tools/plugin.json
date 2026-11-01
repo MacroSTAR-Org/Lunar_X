@@ -9,8 +9,8 @@
       "key": "log_messages",
       "label": "记录群消息",
       "type": "bool",
-      "default": true,
-      "hint": "关闭后 $历史消息 和 $群消息统计 将没有新数据"
+      "default": false,
+      "hint": "关闭后 $历史消息 和 $群消息统计 将没有新数据。默认关闭：群消息属于个人数据，默认全量入库不合适"
     },
     {
       "key": "log_groups",
@@ -25,6 +25,15 @@
       "type": "bool",
       "default": false,
       "hint": "私聊内容较敏感，默认不记录"
+    },
+    {
+      "key": "retention_days",
+      "label": "消息保留天数",
+      "type": "int",
+      "default": 30,
+      "min": 1,
+      "max": 3650,
+      "hint": "超过这个天数的消息会被自动删除。0 表示永久保留（不推荐）"
     },
     {
       "key": "search_limit",

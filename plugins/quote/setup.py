@@ -16,6 +16,7 @@ TRIGGHT_KEYWORD = "Any"
 PLT_ST = 3
 HELP_MESSAGE = "群聊语录：$收录 / $语录 / $语录列表 / $语录搜索 / $删除语录"
 
+import contextlib
 import os
 import random
 import shutil
@@ -25,6 +26,16 @@ from datetime import datetime
 
 _conn = None
 _last_id = None  # 避免随机连续重复
+
+
+async def on_unload(bot):
+    """热重载 / 退出时关闭 SQLite 连接。"""
+    global _conn
+    if _conn is not None:
+        try:
+            _conn.close()
+        finally:
+            _conn = None
 
 
 def _cfg(bot):
@@ -52,6 +63,8 @@ def get_conn(bot):
         bot.plugin_logger.info(f"[quote] 已迁移旧数据库 {legacy} → {db_path}")
 
     _conn = sqlite3.connect(db_path, check_same_thread=False)
+    _conn.execute("PRAGMA journal_mode=WAL")
+    _conn.execute("PRAGMA busy_timeout=5000")
     _conn.execute("""
         CREATE TABLE IF NOT EXISTS quotes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,6 +76,8 @@ def get_conn(bot):
         )""")
     _conn.execute("CREATE INDEX IF NOT EXISTS idx_quotes_group ON quotes(group_id)")
     _conn.commit()
+    with contextlib.suppress(OSError):
+        os.chmod(db_path, 0o600)
     return _conn
 
 
@@ -119,9 +134,11 @@ def list_quotes(bot, group_id, category="", limit=20):
 
 def search_quotes(bot, group_id, keyword, limit=20):
     conn = get_conn(bot)
+    escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     rows = conn.execute(
-        "SELECT id, category, content, user_id, ts FROM quotes WHERE group_id = ? AND content LIKE ? ORDER BY id DESC LIMIT ?",
-        (group_id, f"%{keyword}%", limit),
+        "SELECT id, category, content, user_id, ts FROM quotes "
+        "WHERE group_id = ? AND content LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?",
+        (group_id, f"%{escaped}%", limit),
     ).fetchall()
     return [
         {"id": r[0], "category": r[1], "content": r[2], "user_id": r[3], "ts": r[4]} for r in rows
@@ -190,10 +207,10 @@ async def on_message(event, bot):
         return False
 
     cfg = _cfg(bot)
-    max_len = int(cfg.get("max_content_length", 200))
-    max_cat = int(cfg.get("max_category_length", 6))
-    list_limit = int(cfg.get("list_limit", 20))
-    pool = int(cfg.get("random_pool", 500))
+    max_len = max(10, min(int(cfg.get("max_content_length", 200)), 2000))
+    max_cat = max(1, min(int(cfg.get("max_category_length", 6)), 20))
+    list_limit = max(1, min(int(cfg.get("list_limit", 20)), 100))
+    pool = max(10, min(int(cfg.get("random_pool", 500)), 5000))
 
     # ---------- 收录 ----------
     if cmd == "收录":
@@ -208,11 +225,14 @@ async def on_message(event, bot):
                 return True
             category = ""
         else:
-            parts = args.split(" ", 1)
+            parts = args.split(None, 1)
             if len(parts) == 2 and len(parts[0]) <= max_cat:
                 category, content = parts[0].strip(), parts[1].strip()
             else:
                 category, content = "", args.strip()
+        if not content:
+            await bot.send("语录内容不能为空", group_id=group_id)
+            return True
         if len(content) > max_len:
             await bot.send(f"语录内容太长了（最多 {max_len} 字）", group_id=group_id)
             return True

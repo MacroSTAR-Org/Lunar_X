@@ -15,6 +15,7 @@ PLT_ST = 1
 HELP_MESSAGE = "AI 对话，用法: $ai <问题>"
 
 import re
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -22,6 +23,16 @@ from core.events import MessageEvent
 
 _session = None
 _histories = {}
+_MAX_HISTORY_KEYS = 200
+
+
+async def on_unload(bot):
+    """热重载 / 退出时关闭 aiohttp session 并清空内存会话。"""
+    global _session
+    if _session is not None and not _session.closed:
+        await _session.close()
+    _session = None
+    _histories.clear()
 
 
 def _cfg(bot):
@@ -49,10 +60,11 @@ def _is_mentioning_bot(event):
     if not hasattr(event, "message"):
         return False
     self_id = str(getattr(event, "self_id", 0))
-    for seg in event.message:
-        if seg.type == "at" and str(seg.data.get("qq", "")) in (self_id, "all"):
-            return True
-    return False
+    # @全体成员 不算在叫机器人，避免一条 @all 触发全群 AI
+    return any(
+        seg.type == "at" and str(seg.data.get("qq", "")) == self_id
+        for seg in event.message
+    )
 
 
 def _history_key(event):
@@ -96,13 +108,27 @@ def _persona_nicknames(cfg):
     return [n] if n else []
 
 
+def _is_safe_api_base(api_base: str) -> bool:
+    """只允许 https，或本机 http（兼容本地 Ollama 等）。"""
+    try:
+        parsed = urlparse(api_base)
+    except ValueError:
+        return False
+    if parsed.scheme == "https" and parsed.hostname:
+        return True
+    return parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+
+
 async def _ask_ai(bot, cfg, event, question):
     api_base = (cfg.get("api_base") or "").rstrip("/")
     api_key = cfg.get("api_key")
     model = cfg.get("model") or "gpt-3.5-turbo"
     if not api_base or not api_key:
         return "⚠️ AI 未配置：请在 WebUI「插件管理 → ai_chat → 配置」里填写接口地址和 Key"
+    if not _is_safe_api_base(api_base):
+        return "⚠️ API 地址不安全：只允许 https（或本机 http）"
 
+    question = question[:4000]
     key = _history_key(event)
     history = _histories.get(key)
     if not history:
@@ -115,11 +141,20 @@ async def _ask_ai(bot, cfg, event, question):
         history = [{"role": "system", "content": system_prompt}]
     history.append({"role": "user", "content": question})
 
+    try:
+        temperature = max(0.0, min(float(cfg.get("temperature", 0.7)), 2.0))
+    except (TypeError, ValueError):
+        temperature = 0.7
+    try:
+        max_tokens = max(64, min(int(cfg.get("max_tokens", 2048)), 8192))
+    except (TypeError, ValueError):
+        max_tokens = 2048
+
     payload = {
         "model": model,
         "messages": history,
-        "temperature": cfg.get("temperature", 0.7),
-        "max_tokens": cfg.get("max_tokens", 2048),
+        "temperature": temperature,
+        "max_tokens": max_tokens,
     }
     try:
         async with _session_ref().post(
@@ -142,10 +177,13 @@ async def _ask_ai(bot, cfg, event, question):
         return f"⚠️ AI 调用失败: {e}"
 
     history.append({"role": "assistant", "content": content})
-    max_history = int(cfg.get("max_history", 10))
+    max_history = max(0, min(int(cfg.get("max_history", 10)), 50))
     if len(history) > 1 + max_history * 2:
         history = [history[0], *history[-(max_history * 2) :]]
     _histories[key] = history
+    # 防止长期运行后按用户/群无限累积
+    while len(_histories) > _MAX_HISTORY_KEYS:
+        _histories.pop(next(iter(_histories)), None)
     return content
 
 

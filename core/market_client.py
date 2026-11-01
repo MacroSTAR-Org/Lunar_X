@@ -92,6 +92,7 @@ class PluginMarketClient:
                         "version": item.get("version", "1.0.0"),
                         "description": item.get("description", ""),
                         "author": item.get("author", ""),
+                        "sha256": item.get("sha256", ""),
                         "path": plugin_id,
                     }
                 )
@@ -126,6 +127,7 @@ class PluginMarketClient:
                                     "version": item.get("version", "0.1.0"),
                                     "description": item.get("description", ""),
                                     "download_url": item.get("downloadUrl", ""),
+                                    "sha256": item.get("sha256", ""),
                                 }
                                 if plugin["id"] and plugin["name"]:
                                     plugins.append(plugin)

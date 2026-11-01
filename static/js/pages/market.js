@@ -2,8 +2,8 @@
  * 插件市场 —— 插件源设置 + 在线插件列表 + 安装
  *
  * 两个易踩的点：
- *   1. POST /api/config/webui 是整文件覆盖，必须基于 rawWebui 深拷贝再改，
- *      否则会把 password_hash / session_secret 抹掉 → 账号与所有会话失效
+ *   1. 插件源设置走 /api/webui/settings，只提交白名单字段，
+ *      密码哈希 / session secret / PAT 不会出现在浏览器里
  *   2. POST /api/plugins 是 POST 形式的 SSE，EventSource 用不了，
  *      走 Api.postStream（fetch + ReadableStream 手动分帧）
  * ============================================================ */
@@ -56,7 +56,10 @@ window.Pages.Market = {
         <el-col :xs="24" :sm="8">
           <el-form-item label="GitHub PAT（可选，提高 API 限额）">
             <el-input v-model="wc.github_pat" show-password autocomplete="new-password"
-                      name="lx-github-pat" placeholder="github_pat_..." />
+                      name="lx-github-pat" :placeholder="patConfigured ? '已配置，留空保持不变' : 'github_pat_...'" />
+            <el-checkbox v-if="patConfigured" v-model="clearPat" style="margin-top:4px">
+              清除已保存的 PAT
+            </el-checkbox>
           </el-form-item>
         </el-col>
         <el-col :xs="24" :sm="8">
@@ -135,7 +138,8 @@ window.Pages.Market = {
   data() {
     return {
       mirrors: GITHUB_MIRRORS,
-      rawWebui: null,
+      patConfigured: false,
+      clearPat: false,
       wc: {
         use_pypi_mirror: false,
         pypi_mirror: '',
@@ -154,7 +158,7 @@ window.Pages.Market = {
       percent: 0,
       log: '',
       tail: '',        // 「下载中 x/y」这类高频消息单独放，原地覆盖不刷屏
-      form: { name: '', url: '', path: '' },
+      form: { id: '', name: '', url: '', path: '', sha256: '' },
     };
   },
 
@@ -177,13 +181,14 @@ window.Pages.Market = {
   methods: {
     async loadWebui() {
       try {
-        const raw = await Api.get('/api/config/webui');
-        this.rawWebui = raw;
+        const raw = await Api.get('/api/webui/settings');
+        this.patConfigured = raw.github_pat_configured === true;
+        this.clearPat = false;
         this.wc = {
           use_pypi_mirror: raw.use_pypi_mirror === true,
           pypi_mirror: raw.pypi_mirror || '',
           github_mirror: raw.github_mirror || '',
-          github_pat: raw.github_pat || '',
+          github_pat: '',
           plugins_index_repo: raw.plugins_index_repo || 'Unisphere-Platform/LunarXU',
           market_source_order: raw.market_source_order || ['unisphere', 'github']
         };
@@ -193,17 +198,17 @@ window.Pages.Market = {
     },
 
     async saveWebui() {
-      if (!this.rawWebui) {
-        this.$message.error('配置尚未加载完成，无法保存');
-        return;
-      }
       this.saving = true;
       try {
-        // 深拷贝原文件再覆盖，保住 password_hash / session_secret
-        const out = Object.assign(JSON.parse(JSON.stringify(this.rawWebui)), this.wc);
-        await Api.post('/api/config/webui', out);
-        this.rawWebui = out;
-        this.$message.success('插件源设置已保存');
+        const payload = Object.assign({}, this.wc);
+        if (this.clearPat) payload.clear_github_pat = true;
+        if (!payload.github_pat) delete payload.github_pat;
+        const data = await Api.post('/api/webui/settings', payload);
+        const saved = (data && data.settings) || {};
+        this.patConfigured = saved.github_pat_configured === true;
+        this.wc.github_pat = '';
+        this.clearPat = false;
+        this.$message.success((data && data.message) || '插件源设置已保存');
       } catch (e) {
         this.$message.error(e.message);
       } finally {
@@ -226,7 +231,13 @@ window.Pages.Market = {
     },
 
     openInstall(row) {
-      this.form = { id: row.id, name: row.name, url: row.url, path: row.path };
+      this.form = {
+        id: row.id,
+        name: row.name,
+        url: row.url,
+        path: row.path,
+        sha256: row.sha256 || row.checksum || '',
+      };
       this.log = '';
       this.tail = '';
       this.percent = 0;
@@ -262,6 +273,7 @@ window.Pages.Market = {
           name: this.form.id,
           url: this.form.url,
           path: this.form.path,
+          sha256: this.form.sha256 || '',
           use_pypi_mirror: this.wc.use_pypi_mirror,
           pypi_mirror: this.wc.pypi_mirror,
           // 后端用它匹配解压出的 <repo>-main 目录

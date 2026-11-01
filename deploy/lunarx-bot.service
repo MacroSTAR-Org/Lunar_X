@@ -1,0 +1,55 @@
+# ============================================================================
+# systemd 单元示例：Lunar X Bot
+#
+# 安装：
+#   sudo cp deploy/lunarx-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now lunarx-bot
+#
+# Bot 与 WebUI 是两个独立进程：
+#   - Bot  负责收发消息、跑插件（长连接）
+#   - WebUI 负责面板与配置（HTTP）
+# WebUI 里的「重启 Bot」按钮通过 pid 文件找 Bot 进程，两者需同一运行账号，
+# 且 Bot 的 WorkingDirectory 必须与 WebUI 一致。
+# ============================================================================
+
+[Unit]
+Description=Lunar X Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=lunarx
+Group=lunarx
+WorkingDirectory=/opt/Lunar_X
+
+EnvironmentFile=/etc/lunarx.env
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/opt/Lunar_X/.venv/bin/python main.py
+
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+# WebUI 主动重启 Bot 时先 TERM，给它 10 秒收尾
+TimeoutStopSec=15
+
+# ── 安全加固 ──────────────────────────────────────────────────────────────
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/Lunar_X/logs /opt/Lunar_X/data /opt/Lunar_X/plugins
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lunarx-bot
+
+[Install]
+WantedBy=multi-user.target

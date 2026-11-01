@@ -12,13 +12,8 @@ dependencies = [
     "flask>=3.0",
     "requests>=2.31",
     "psutil>=5.9",
-    "websockets>=12.0",
-    # 配置、认证与 API
-    "cryptography>=42.0",
-    "openai>=1.0",
-    "pydantic>=2.0",
-    "pyjwt>=2.8",
-    "pyyaml>=6.0",
+    # additional_headers 是较新版本才有的参数，旧版会直接 TypeError
+    "websockets>=14.0",
 ]
 
 [project.scripts]
@@ -39,6 +34,11 @@ full = [
     # 图像与数值处理
     "numpy>=1.26",
     "pillow>=10.0",
+]
+# 生产部署用的 WSGI 服务器。
+# waitress 纯 Python、跨平台（含 Windows），gunicorn 只支持 Unix。
+serve = [
+    "waitress>=3.0",
 ]
 windows = [
     # Windows 桌面 WebUI 与系统集成

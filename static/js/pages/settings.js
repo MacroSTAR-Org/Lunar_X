@@ -85,7 +85,7 @@ window.Pages.Settings = {
             <el-col :xs="24" :sm="8">
               <el-form-item label="新密码">
                 <el-input v-model="cred.new1" type="password" show-password autocomplete="new-password" />
-                <div class="form-hint">不修改请留空；至少 4 位</div>
+                <div class="form-hint">不修改请留空；至少 8 位</div>
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="8">
@@ -231,13 +231,19 @@ window.Pages.Settings = {
         this.$message.warning('两次输入的新密码不一致');
         return;
       }
+      if (this.cred.new1 && this.cred.new1.length < 8) {
+        this.$message.warning('新密码至少 8 位');
+        return;
+      }
       this.saving.cred = true;
       try {
-        const data = await Api.post('/api/change_password', {
+        const payload = {
           old_password: this.cred.old,
-          new_password: this.cred.new1 || this.cred.old,   // 密码不改时原样提交
           new_username: username,
-        });
+        };
+        if (this.cred.new1) payload.new_password = this.cred.new1;
+        const data = await Api.post('/api/change_password', payload);
+        if (data && data.csrf_token) Api.setCsrfToken(data.csrf_token);
         this.$message.success((data && data.message) || '凭据已保存');
         this.cred.old = this.cred.new1 = this.cred.new2 = '';
       } catch (e) {

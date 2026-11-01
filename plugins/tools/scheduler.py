@@ -8,11 +8,16 @@ from datetime import datetime, timedelta
 from store import (
     add_scheduled,
     cancel_scheduled,
+    count_pending_scheduled,
     fmt_time,
     list_scheduled,
     load_pending_scheduled,
     mark_scheduled_done,
 )
+
+MAX_DELAY_SECONDS = 30 * 86400
+MAX_CONTENT_LENGTH = 200
+MAX_PENDING_PER_GROUP = 50
 
 DURATION_UNITS = {
     "秒": 1,
@@ -66,20 +71,35 @@ class Scheduler:
         self._running = {}
 
     async def restore(self, bot):
-        """启动时恢复未到期的定时任务"""
+        """启动时恢复未到期的定时任务；已过期任务顺手标记完成。"""
+        now = __import__("time").time()
         for task in load_pending_scheduled():
-            delay = task["due_ts"] - __import__("time").time()
+            delay = task["due_ts"] - now
             if delay <= 0:
+                mark_scheduled_done(task["id"])
                 continue
             await self._arm(bot, task["id"], task["group_id"], task["content"], delay)
 
+    async def shutdown(self):
+        """插件卸载/框架退出时取消所有未触发的协程任务。"""
+        tasks = list(self._running.values())
+        self._running.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     async def _arm(self, bot, task_id, group_id, content, delay):
         async def _run():
-            await asyncio.sleep(max(delay, 0))
-            with contextlib.suppress(Exception):
-                await bot.send(f"⏰ 定时提醒：{content}", group_id=group_id)
-            mark_scheduled_done(task_id)
-            self._running.pop(task_id, None)
+            try:
+                await asyncio.sleep(max(delay, 0))
+                with contextlib.suppress(Exception):
+                    await bot.send(f"⏰ 定时提醒：{content}", group_id=group_id)
+                mark_scheduled_done(task_id)
+            except asyncio.CancelledError:
+                raise
+            finally:
+                self._running.pop(task_id, None)
 
         task = asyncio.create_task(_run())
         self._running[task_id] = task
@@ -117,13 +137,22 @@ class Scheduler:
                 await bot.send("格式: $定时取消 <编号>（用 $定时列表 查看编号）", group_id=group_id)
                 return True
             cancel_scheduled(task_id, group_id)
-            self._running.pop(task_id, None)
+            task = self._running.pop(task_id, None)
+            if task and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
             await bot.send(f"已取消定时任务 #{task_id}", group_id=group_id)
             return True
 
-        parts = args.split(" ", 1)
+        parts = args.split(None, 1)
         first = parts[0].strip()
         content = parts[1].strip() if len(parts) > 1 else "定时提醒"
+        if len(content) > MAX_CONTENT_LENGTH:
+            await bot.send(
+                f"提醒内容太长（最多 {MAX_CONTENT_LENGTH} 字），请缩短后再试", group_id=group_id
+            )
+            return True
 
         delay = parse_duration(first)
         if delay is None:
@@ -131,6 +160,15 @@ class Scheduler:
         if delay is None:
             await bot.send(
                 "时间格式不支持，示例: $定时 10分钟 内容 或 $定时 09:00 内容", group_id=group_id
+            )
+            return True
+        if delay > MAX_DELAY_SECONDS:
+            await bot.send("定时时间过长（最多 30 天），请缩短后再试", group_id=group_id)
+            return True
+        if count_pending_scheduled(group_id) >= MAX_PENDING_PER_GROUP:
+            await bot.send(
+                f"本群待触发的定时任务已达 {MAX_PENDING_PER_GROUP} 个，请先取消一些",
+                group_id=group_id,
             )
             return True
 

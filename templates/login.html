@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/static/vendor/element-plus.css">
   <link rel="stylesheet" href="/static/vendor/element-plus-dark.css">
   <link rel="stylesheet" href="/static/js/md3-expressive.css">
-  <script>
+  <script nonce="{{ csp_nonce }}">
     // 主题跟随主界面（localStorage 记忆）。旧版三主题取值在这里归一化：
     // white → light，pink/blue/空 → dark
     (function () {
@@ -37,7 +37,7 @@
   <script src="/static/vendor/vue.global.prod.js"></script>
   <script src="/static/vendor/element-plus.full.min.js"></script>
   <script src="/static/vendor/element-plus-icons.iife.min.js"></script>
-  <script>
+  <script nonce="{{ csp_nonce }}">
     const app = Vue.createApp({
       template: `
       <div class="login-card">
@@ -60,7 +60,7 @@
           <el-button type="primary" style="width: 100%; height: 46px; font-size: 15px; margin-top: 4px;"
                      :loading="loading" @click="doLogin">登 录</el-button>
         </el-form>
-        <div class="login-tip">默认账号 lunarx · 默认密码 lunarx</div>
+        <div class="login-tip">首次启动的随机密码见控制台输出或项目根目录 webui.initial_password</div>
       </div>
       `,
       data() {

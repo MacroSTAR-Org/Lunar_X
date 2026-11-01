@@ -1,0 +1,73 @@
+# ============================================================================
+# systemd 单元示例：Lunar X WebUI + Bot
+#
+# 安装：
+#   sudo cp deploy/lunarx-webui.service deploy/lunarx-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now lunarx-webui
+#
+# 记得先改这几项：
+#   User / Group      运行账号（不要用 root）
+#   WorkingDirectory  项目绝对路径
+#   ExecStart         指向实际的 Python 解释器
+#
+# 环境变量放在 EnvironmentFile 里，便于改配置而不动 unit 文件：
+#   sudo cp deploy/lunarx.env.example /etc/lunarx.env
+#   sudo chmod 600 /etc/lunarx.env
+# ============================================================================
+
+[Unit]
+Description=Lunar X WebUI (Gunicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=lunarx
+Group=lunarx
+WorkingDirectory=/opt/Lunar_X
+
+# 关键环境变量
+EnvironmentFile=/etc/lunarx.env
+
+# 反代信任层数：只有确实有 Nginx/Caddy 在前面才设 1
+Environment=LUNARX_TRUST_PROXY=1
+# 外层是 https，session cookie 必须带 Secure
+Environment=LUNARX_COOKIE_SECURE=1
+# 限制 Host 头，防 Host 注入
+Environment=LUNARX_ALLOWED_HOSTS=lunarx.example.com
+# 只监听本机，公网交给反代
+Environment=LUNARX_WEB_BIND=127.0.0.1:5000
+
+# 用 uv 管理的虚拟环境里的 gunicorn
+ExecStart=/opt/Lunar_X/.venv/bin/gunicorn -c deploy/gunicorn.conf.py wsgi:application
+
+Restart=on-failure
+RestartSec=5
+# 优雅停机，给 WSGI worker 一点时间收尾
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# ── 安全加固 ──────────────────────────────────────────────────────────────
+# 只让服务读自己的目录，写日志与数据
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/Lunar_X/logs /opt/Lunar_X/data /opt/Lunar_X/plugins /opt/Lunar_X/uploads
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+# WebUI 要执行插件安装脚本，需要能起子进程
+RestrictNamespaces=~^((mnt|ipc|uts|pid|user|net|cgroup)$)
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lunarx-webui
+
+[Install]
+WantedBy=multi-user.target

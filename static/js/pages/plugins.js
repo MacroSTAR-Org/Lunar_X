@@ -66,7 +66,7 @@ window.Pages.Plugins = {
             <el-switch v-if="item.type === 'bool'" v-model="form[item.key]" />
 
             <el-input v-else-if="item.type === 'secret'" v-model="form[item.key]"
-                      show-password :placeholder="item.placeholder || ''" />
+                      show-password :placeholder="item.placeholder || '留空表示保持原值'" />
 
             <el-input v-else-if="item.type === 'text'" v-model="form[item.key]"
                       type="textarea" :rows="item.rows || 3" :placeholder="item.placeholder || ''" />
@@ -191,9 +191,14 @@ window.Pages.Plugins = {
         const form = {};
         for (const item of this.schema) {
           const v = values[item.key];
-          form[item.key] = (item.type === 'string_list' || item.type === 'int_list')
-            ? (Array.isArray(v) ? v.join('\n') : (v == null ? '' : String(v)))
-            : v;
+          if (item.type === 'secret') {
+            // 密钥不会从服务端回传明文；占位符当作“已设置”，表单留空
+            form[item.key] = (v && v !== '__LUNARX_KEEP_SECRET__') ? v : '';
+          } else {
+            form[item.key] = (item.type === 'string_list' || item.type === 'int_list')
+              ? (Array.isArray(v) ? v.join('\n') : (v == null ? '' : String(v)))
+              : v;
+          }
         }
         this.form = form;
       } catch (e) {
@@ -211,6 +216,10 @@ window.Pages.Plugins = {
         const payload = {};
         for (const item of this.schema) {
           const v = this.form[item.key];
+          if (item.type === 'secret' && (!v || v === '__LUNARX_KEEP_SECRET__')) {
+            // 留空 = 保留已保存的密钥，不要把空字符串写进 config.json
+            continue;
+          }
           payload[item.key] = (item.type === 'string_list' || item.type === 'int_list')
             ? String(v == null ? '' : v).split('\n').map(s => s.trim()).filter(Boolean)
             : v;
