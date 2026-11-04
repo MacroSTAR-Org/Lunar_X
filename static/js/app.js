@@ -187,6 +187,7 @@
         restarting: false,
         passwordVisible: false,
         securityMode: false,
+        mustChangePassword: false,
         pwSaving: false,
         pw: { user: '', old: '', new1: '', new2: '' },
       };
@@ -258,7 +259,11 @@
 
       async loadUser() {
         const data = await Api.tryGet('/api/auth_status', null);
-        if (data) this.username = data.username || '';
+        if (data) {
+          this.username = data.username || '';
+          this.mustChangePassword = data.must_change_password === true;
+          if (data.csrf_token) Api.setCsrfToken(data.csrf_token);
+        }
       },
 
       async loadVersion() {
@@ -278,7 +283,7 @@
       /** 登录后检测是否仍为默认凭据；若是，弹出不可关闭的安全提醒要求立即改密 */
       async checkDefaultCredentials() {
         const data = await Api.tryGet('/api/check_default_credentials', null);
-        if (data && data.is_default) {
+        if ((data && data.is_default) || this.mustChangePassword) {
           this.securityMode = true;
           this.passwordVisible = true;
         }
@@ -316,6 +321,10 @@
           this.$message.warning('两次输入的新密码不一致');
           return;
         }
+        if (this.pw.new1.length < 8) {
+          this.$message.warning('新密码至少 8 位');
+          return;
+        }
         if (this.securityMode && !this.pw.user.trim()) {
           this.$message.warning('请设置新的用户名');
           return;
@@ -328,6 +337,7 @@
             new_username: this.securityMode ? this.pw.user.trim() : undefined,
           });
           this.$message.success((data && data.message) || '凭据已修改');
+          if (data && data.csrf_token) Api.setCsrfToken(data.csrf_token);
           this.username = this.securityMode ? this.pw.user.trim() : this.username;
           this.passwordVisible = false;
           this.securityMode = false;
@@ -346,6 +356,7 @@
     try {
       const status = await Api.get('/api/auth_status');
       if (!status || !status.logged_in) { location.href = '/login'; return; }
+      if (status.csrf_token) Api.setCsrfToken(status.csrf_token);
     } catch (e) {
       location.href = '/login';
       return;

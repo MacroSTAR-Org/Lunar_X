@@ -41,6 +41,7 @@ window.Pages.Config = {
             <el-col :xs="24" :sm="8">
               <el-form-item label="AccessToken">
                 <el-input v-model="impl.AccessToken" show-password placeholder="协议端鉴权 token" />
+                <div class="form-hint">已保存的 token 显示为占位符；留空/占位符保存时保持原值</div>
               </el-form-item>
             </el-col>
           </el-row>

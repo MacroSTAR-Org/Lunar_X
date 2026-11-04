@@ -1,0 +1,117 @@
+# ============================================================================
+# Nginx 反向代理配置示例（Lunar X WebUI）
+#
+# 用法：
+#   1. 把你的域名替换到 server_name
+#   2. 证书路径替换到 ssl_certificate / ssl_certificate_key
+#   3. ln -s 本文件 /etc/nginx/conf.d/lunarx.conf && nginx -t && systemctl reload nginx
+#
+# 与应用侧的配合（都要设，缺一不可）：
+#   环境变量 LUNARX_TRUST_PROXY=1      让 Flask 信任 X-Forwarded-*
+#   环境变量 LUNARX_COOKIE_SECURE=1     外层是 https，session cookie 要带 Secure
+#   环境变量 LUNARX_ALLOWED_HOSTS=你的域名  限制 Host 头，防 Host 注入
+#
+# 反代只监听 127.0.0.1:5000（应用侧默认），公网只暴露 443。
+# ============================================================================
+
+# 上游：保持和应用监听地址一致
+upstream lunarx_webui {
+    server 127.0.0.1:5000;
+    keepalive 16;
+}
+
+# HTTP 全部跳 HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name lunarx.example.com;
+
+    # ACME 证书签发需要走明文 80
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name lunarx.example.com;
+
+    # ── TLS ────────────────────────────────────────────────────────────────
+    ssl_certificate     /etc/letsencrypt/live/lunarx.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/lunarx.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    # HSTS：确认域名已能稳定访问 https 后再开
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # ── 基础安全头（应用侧也会设，这里是反代层的冗余保险）────────────────
+    # CSP 由应用按响应动态生成（带 nonce），不要在这里写死，
+    # 否则会覆盖掉应用的值，nonce 失效导致页面脚本全挂。
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    # ── 上传与超时 ─────────────────────────────────────────────────────────
+    # 插件 ZIP 走应用端下载，不经反代上传；留 64M 兜底
+    client_max_body_size 64m;
+    client_body_timeout 60s;
+
+    # 插件安装要跑 pip，日志走 SSE 逐行推送：
+    #   * proxy_buffering off 必须开，否则 SSE 会被攒到结束才一次性吐出
+    #   * proxy_read_timeout 要够长，覆盖 pip 安装耗时
+    proxy_connect_timeout 10s;
+    proxy_send_timeout    300s;
+    proxy_read_timeout    300s;
+
+    location / {
+        proxy_pass         http://lunarx_webui;
+        proxy_http_version 1.1;
+
+        # 这三个头是应用侧 LUNARX_TRUST_PROXY=1 的前提
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   X-Forwarded-Host  $host;
+
+        # SSE / 长轮询需要
+        proxy_set_header   Connection        "";
+        proxy_buffering    off;
+        proxy_cache        off;
+
+        # 静态资源（字体、vendor 库）可以交给 Nginx 直接缓存，
+        # 但 /static/ 由应用鉴权逻辑放行，改动前端后记得清缓存
+        location /static/ {
+            proxy_pass       http://lunarx_webui;
+            proxy_set_header Host $host;
+            expires 5m;
+            add_header Cache-Control "public, max-age=300";
+        }
+    }
+
+    # ── 限流：登录接口单独收紧 ─────────────────────────────────────────────
+    # 暴力破解主要发生在 /api/login，用一个独立 zone 卡住它
+    limit_req_zone $binary_remote_addr zone=lunarx_login:10m rate=10r/m;
+    limit_req_zone $binary_remote_addr zone=lunarx_api:10m   rate=120r/m;
+
+    location = /api/login {
+        limit_req zone=lunarx_login burst=5 nodelay;
+        proxy_pass       http://lunarx_webui;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # 简易 IP 黑名单：需要时把要封的 IP 加进来
+    # deny 203.0.113.5;
+}

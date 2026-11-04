@@ -26,12 +26,22 @@
     location.href = '/login';
   }
 
+  let csrfToken = null;
+
+  function setCsrfToken(token) {
+    csrfToken = token || null;
+  }
+
   async function request(method, url, body, options) {
     const opts = Object.assign({
       method: method,
       cache: 'no-store',
       headers: {},
     }, options || {});
+
+    if (method !== 'GET' && method !== 'HEAD' && csrfToken) {
+      opts.headers = Object.assign({ 'X-CSRF-Token': csrfToken }, opts.headers);
+    }
 
     if (body !== undefined && body !== null) {
       opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers);
@@ -71,6 +81,7 @@
 
   const Api = {
     ApiError: ApiError,
+    setCsrfToken: setCsrfToken,
 
     get: (url, options) => request('GET', url, null, options),
     post: (url, body, options) => request('POST', url, body === undefined ? null : body, options),
@@ -92,10 +103,12 @@
      * 返回 Promise，流结束时 resolve
      */
     async postStream(url, body, onLine) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
       const resp = await fetch(url, {
         method: 'POST',
         cache: 'no-store',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify(body),
       });
       if (resp.status === 401) {

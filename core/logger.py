@@ -160,11 +160,28 @@ class LunarLogger:
         self._setup_file_handler()
         self._setup_default_loggers()
 
+    def begin_run(self):
+        """由 Bot 主进程启动时调用：归档上一次运行日志并重建文件句柄。
+
+        不能放在模块导入时做——WebUI 只是 import 一个配置工具就会触发
+        日志轮转，把正在运行的 Bot 的日志搬走，控制台随后读到空文件。
+        """
+        old_handler = getattr(self, "_file_handler", None)
+        for plugin_logger in self._loggers.values():
+            if old_handler is not None:
+                plugin_logger.removeHandler(old_handler)
+        if old_handler is not None:
+            old_handler.close()
+
+        _archive_previous_run()
+        self._setup_file_handler()
+        for plugin_logger in self._loggers.values():
+            self._attach_file_handler(plugin_logger)
+
     def _setup_file_handler(self):
         """所有 logger 共用的文件输出（供 WebUI 控制台读取）"""
         try:
             os.makedirs(LOG_DIR, exist_ok=True)
-            _archive_previous_run()
             self._file_handler = RotatingFileHandler(
                 LOG_FILE, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8"
             )

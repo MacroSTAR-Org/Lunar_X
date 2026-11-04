@@ -81,22 +81,26 @@ class OneBotAdapter:
 
         if group_id:
             params["group_id"] = group_id
-            await self.bot.connection.send({"action": "send_group_forward_msg", "params": params})
+            action = "send_group_forward_msg"
         elif user_id:
             params["user_id"] = user_id
-            await self.bot.connection.send({"action": "send_private_forward_msg", "params": params})
+            action = "send_private_forward_msg"
         else:
             logger.error("发送转发消息需要指定user_id或group_id")
             return False
 
-        return True
+        result = await self.bot.connection.send(
+            {"action": action, "params": params}, wait_for_response=True
+        )
+        return bool(result and result.get("status") == "ok")
 
     async def delete_message(
         self, message_id: int, user_id: int | None = None, group_id: int | None = None
     ):
         try:
             result = await self.bot.connection.send(
-                {"action": "delete_msg", "params": {"message_id": message_id}}
+                {"action": "delete_msg", "params": {"message_id": message_id}},
+                wait_for_response=True,
             )
             return result
         except Exception as e:
@@ -105,10 +109,18 @@ class OneBotAdapter:
 
     async def get_forward_message(self, message_id: str) -> dict:
         try:
-            await self.bot.connection.send(
-                {"action": "get_forward_msg", "params": {"message_id": message_id}}
+            response = await self.bot.connection.send(
+                {"action": "get_forward_msg", "params": {"message_id": message_id}},
+                wait_for_response=True,
             )
-            return {"status": "ok", "message_id": message_id}
+            if response and response.get("status") == "ok":
+                data = response.get("data") or {}
+                messages = data.get("messages", data) if isinstance(data, dict) else data
+                return {"status": "ok", "messages": messages}
+            return {
+                "status": "failed",
+                "msg": response.get("message", "获取失败") if response else "未收到响应",
+            }
         except Exception as e:
             logger.error(f"获取合并转发消息失败: {e}")
             return {"status": "error", "msg": str(e)}

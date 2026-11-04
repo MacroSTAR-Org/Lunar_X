@@ -38,7 +38,8 @@ class WebSocketConnection(BaseTransport):
             separator = "&" if "?" in ws_url else "?"
             ws_url = f"{ws_url}{separator}access_token={self.token}"
             if not is_reconnect:
-                logger.info(f"将使用Token作为URL查询参数进行认证: {ws_url}")
+                # 只记录目标地址，绝不把拼进去的 token 写进日志
+                logger.info(f"将使用 Token 连接 WebSocket: {self.ws_url}")
 
         while retries < max_attempts:
             if self._is_closing:
@@ -47,16 +48,24 @@ class WebSocketConnection(BaseTransport):
 
             try:
                 if is_reconnect:
-                    logger.warning(f"尝试重连至WebSocket服务器 {ws_url} (第 {retries + 1} 次重试)")
+                    logger.warning(
+                        f"尝试重连至WebSocket服务器 {self.ws_url} (第 {retries + 1} 次重试)"
+                    )
                 else:
                     logger.info(
-                        f"尝试连接至WebSocket服务器 {ws_url} (尝试 {retries + 1}/{self.max_retries})"
+                        f"尝试连接至WebSocket服务器 {self.ws_url} (尝试 {retries + 1}/{self.max_retries})"
                     )
 
                 self.websocket = await websockets.connect(ws_url)
                 logger.success("WebSocket连接成功")
 
-                if is_reconnect and self._listener_task and not self._listener_task.done():
+                current_task = asyncio.current_task()
+                if (
+                    is_reconnect
+                    and self._listener_task
+                    and self._listener_task is not current_task
+                    and not self._listener_task.done()
+                ):
                     self._listener_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await self._listener_task
@@ -90,6 +99,13 @@ class WebSocketConnection(BaseTransport):
 
         return False
 
+    def _fail_pending(self, message: str) -> None:
+        """连接断开时立刻唤醒所有等待中的 API 调用，避免各自白等 30 秒。"""
+        for request_id, future in list(self._pending_requests.items()):
+            if not future.done():
+                future.set_exception(ConnectionError(message))
+            self._pending_requests.pop(request_id, None)
+
     async def _reconnect_loop(self):
         if self._is_closing:
             return
@@ -97,6 +113,7 @@ class WebSocketConnection(BaseTransport):
         logger.error("WebSocket连接意外断开，尝试重新连接...")
 
         self.websocket = None
+        self._fail_pending("WebSocket连接已断开")
 
         success = await self.connect(is_reconnect=True)
 
@@ -116,13 +133,13 @@ class WebSocketConnection(BaseTransport):
                 try:
                     data = await asyncio.to_thread(json.loads, message)
 
-                    request_id = None
-                    if (
-                        "echo" in data
-                        and isinstance(data["echo"], dict)
-                        and "request_id" in data["echo"]
-                    ):
-                        request_id = data["echo"]["request_id"]
+                    echo = data.get("echo")
+                    if isinstance(echo, dict):
+                        request_id = echo.get("request_id")
+                    elif isinstance(echo, str):
+                        request_id = echo
+                    else:
+                        request_id = None
 
                     if request_id:
                         future = self._pending_requests.get(request_id)
@@ -200,7 +217,7 @@ class WebSocketConnection(BaseTransport):
 
         if wait_for_response:
             request_id = str(uuid.uuid4())
-            future = asyncio.get_event_loop().create_future()
+            future = asyncio.get_running_loop().create_future()
             self._pending_requests[request_id] = future
 
             if "echo" not in data:
@@ -300,7 +317,7 @@ class WebSocketConnection(BaseTransport):
 
         for _request_id, future in list(self._pending_requests.items()):
             if not future.done():
-                future.cancel()
+                future.set_exception(ConnectionError("WebSocket连接正在关闭"))
         self._pending_requests.clear()
 
         while not self._message_queue.empty():

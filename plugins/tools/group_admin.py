@@ -30,6 +30,16 @@ def parse_duration(text):
     return num * DURATION_UNITS[unit]
 
 
+def extract_duration(text):
+    """从文本里提取时长（允许 @/QQ 号等前缀），找不到返回 None。"""
+    lowered = text.strip().lower()
+    for unit in sorted(DURATION_UNITS, key=len, reverse=True):
+        match = re.search(rf"(\d+)\s*{re.escape(unit)}", lowered)
+        if match:
+            return int(match.group(1)) * DURATION_UNITS[unit]
+    return None
+
+
 def extract_target_user(event, args):
     """从消息的 @ 段或参数文本中提取目标 QQ 号"""
     for seg in getattr(event, "message", []) or []:
@@ -57,19 +67,25 @@ async def handle(bot, event, cmd, args):
 
     # ---------- 禁言 / 解禁 ----------
     if cmd in ("禁言", "解禁"):
-        if not args:
-            await bot.send(
-                f"用法: ${cmd} @某人 <时长>（时长示例: 10分钟 / 1小时 / 30秒）", group_id=group_id
-            )
-            return True
+        # @ 目标在消息段里，args 可能为空；不能先因 args 为空而拒绝
         target = extract_target_user(event, args)
         if not target:
-            await bot.send("请 @ 要操作的用户或提供 QQ 号", group_id=group_id)
+            await bot.send(
+                f"用法: ${cmd} @某人 <时长>（时长示例: 10分钟 / 1小时 / 30秒）",
+                group_id=group_id,
+            )
             return True
+        if target == getattr(event, "self_id", None) or target == event.user_id:
+            await bot.send("不能对自己或机器人执行该操作", group_id=group_id)
+            return True
+
         if cmd == "禁言":
-            duration = parse_duration(args)
+            duration = extract_duration(args)
             if duration is None:
                 await bot.send("时长格式不支持，示例: 10分钟 / 1小时 / 30秒", group_id=group_id)
+                return True
+            if duration > 30 * 86400:
+                await bot.send("禁言时长不能超过 30 天", group_id=group_id)
                 return True
             result = await bot.diy.set_group_ban(
                 group_id=group_id, user_id=target, duration=duration
@@ -77,11 +93,9 @@ async def handle(bot, event, cmd, args):
         else:
             result = await bot.diy.set_group_ban(group_id=group_id, user_id=target, duration=0)
         if result and result.get("status") == "ok":
-            await bot.send(
-                f"✅ 已{'禁言' if cmd == '禁言' else '解除禁言'} {target}"
-                + (f"（{args.split(' ', 1)[0]}）" if cmd == "禁言" else ""),
-                group_id=group_id,
-            )
+            action = "禁言" if cmd == "禁言" else "解除禁言"
+            detail = f"（{duration // 60} 分钟）" if cmd == "禁言" else ""
+            await bot.send(f"✅ 已{action} {target}{detail}", group_id=group_id)
         else:
             await bot.send(
                 f"操作失败: {result.get('msg', '未知错误') if result else '无响应'}",
@@ -91,12 +105,12 @@ async def handle(bot, event, cmd, args):
 
     # ---------- 踢人 ----------
     if cmd == "踢人":
-        if not args:
-            await bot.send("用法: $踢人 @某人 或 $踢人 <QQ号>", group_id=group_id)
-            return True
         target = extract_target_user(event, args)
         if not target:
-            await bot.send("请 @ 要踢出的用户或提供 QQ 号", group_id=group_id)
+            await bot.send("用法: $踢人 @某人 或 $踢人 <QQ号>", group_id=group_id)
+            return True
+        if target == getattr(event, "self_id", None) or target == event.user_id:
+            await bot.send("不能对自己或机器人执行该操作", group_id=group_id)
             return True
         result = await bot.diy.kick_group_member(group_id=group_id, user_id=target)
         if result and result.get("status") == "ok":

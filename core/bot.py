@@ -7,7 +7,9 @@ import time
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from core.commands import parse_command
 from core.diy import DiyAPI
+from core.security import atomic_write_json
 
 from .connection import WebSocketConnection
 from .events import (
@@ -35,8 +37,21 @@ if TYPE_CHECKING:
 
 
 class LunarBot:
+    # config.json 里允许热更新的键。协议/地址/token 改动必须重启，
+    # 这里不碰，避免把运行中的连接状态换掉。
+    _HOT_CONFIG_KEYS = (
+        "auto_reload_plugins",
+        "bot_name",
+        "bot_name_en",
+        "log_level",
+        "log_save_levels",
+        "root_user",
+        "trigger_keyword",
+    )
+
     def __init__(self, config: dict[str, Any], main_loop: asyncio.AbstractEventLoop):
         self.config = config
+        logger.begin_run()
         logger.configure_from_config(config)
         self.protocol_name = config.get("protocol", "onebot_v11")
         self.connection: BaseTransport
@@ -44,8 +59,10 @@ class LunarBot:
             from .milky_adapter import MilkyAdapter
             from .transport import MilkyTransport
 
-            milky_server = config.get("milky_server", "http://127.0.0.1:3803")
-            milky_token = config.get("milky_token") or config.get("token")
+            milky_server = config.get("milky_server", "http://127.0.0.1:3010")
+            # Milky 与 OneBot 是两套凭据，不能互相回退：
+            # 回退会把 OneBot token 发给 Milky 协议端，既连不上也泄露凭据。
+            milky_token = config.get("milky_token") or None
             self.connection = MilkyTransport(milky_server, milky_token, max_retries=5)
             self.protocol = MilkyAdapter(self)
             logger.info(f"协议模式: Milky (协议端: {milky_server})")
@@ -69,6 +86,9 @@ class LunarBot:
         # 插件私有配置的 mtime 缓存：{插件名: (config.json 的 mtime, 合并后的配置)}
         # 有它才能做到 WebUI 改完配置下一条消息就生效，不必重启
         self._plugin_cfg_cache: dict[str, Any] = {}
+        # 运行时配置热更新：WebUI 保存的 root_user / 管理员名单 / 触发词等
+        self._runtime_mtimes: dict[str, float] = {}
+        self._last_runtime_check = 0.0
         self._register_native_commands()
 
     # ------------------------------------------------------------------
@@ -125,6 +145,95 @@ class LunarBot:
         os.makedirs(path, exist_ok=True)
         return path
 
+    # ------------------------------------------------------------------
+    # 运行时配置热更新
+    # ------------------------------------------------------------------
+    def _admin_config_path(self) -> str:
+        return os.path.join(self._root_dir, "admin114.json")
+
+    def _restart_info_path(self) -> str:
+        return os.path.join(self._root_dir, "restart_info.json")
+
+    @staticmethod
+    def _coerce_user_ids(values: Any) -> list[int]:
+        result: list[int] = []
+        if not isinstance(values, list):
+            return result
+        for value in values:
+            if isinstance(value, bool):
+                continue
+            try:
+                result.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        return result
+
+    def _refresh_runtime_config(self, force: bool = False) -> None:
+        """按 mtime 热更新 config.json / admin114.json 中的安全相关字段。
+
+        WebUI 的“用户管理”和“Bot 配置”以前只写文件，运行中的进程仍用
+        启动时的内存快照：撤销管理员要重启才生效，属于安全隐患。
+        """
+        now = time.monotonic()
+        if not force and now - self._last_runtime_check < 1.0:
+            return
+        self._last_runtime_check = now
+
+        targets = (
+            (os.path.join(self._root_dir, "config.json"), "config"),
+            (self._admin_config_path(), "admin"),
+        )
+
+        for path, kind in targets:
+            try:
+                mtime = os.stat(path).st_mtime
+            except OSError:
+                continue
+            if not force and self._runtime_mtimes.get(path) == mtime:
+                continue
+
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, json.JSONDecodeError) as e:
+                logger.error(f"热加载 {os.path.basename(path)} 失败，继续使用旧配置: {e}")
+                continue
+            if not isinstance(data, dict):
+                logger.error(f"{os.path.basename(path)} 不是 JSON 对象，忽略本次热加载")
+                continue
+
+            self._runtime_mtimes[path] = mtime
+
+            if kind == "config":
+                for key in self._HOT_CONFIG_KEYS:
+                    if key in data:
+                        self.config[key] = data[key]
+                logger.configure_from_config(self.config)
+
+                auto_reload = self.config.get("auto_reload_plugins") is True
+                if auto_reload and not self.plugin_manager.monitoring_enabled:
+                    self.plugin_manager.start_file_monitoring()
+                elif not auto_reload and self.plugin_manager.monitoring_enabled:
+                    self.plugin_manager.stop_file_monitoring()
+            else:
+                for key in ("super_users", "manager_users"):
+                    if key in data:
+                        self.config[key] = self._coerce_user_ids(data[key])
+
+    def _update_admin_file(self, **updates: Any) -> None:
+        """原子更新 admin114.json，避免 r+ 截断到一半时损坏权限文件。"""
+        path = self._admin_config_path()
+        data: dict[str, Any] = {}
+        try:
+            with open(path, encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                data = loaded
+        except FileNotFoundError:
+            pass
+        data.update(updates)
+        atomic_write_json(path, data)
+
     async def gen_message(self, data: dict | list) -> list[BaseSegment]:
         return self.msg.gen_message(data)
 
@@ -145,9 +254,8 @@ class LunarBot:
 
             if response_data:
                 if response_data.get("status") == "ok":
-                    logger.success(
-                        f"调用自定义API成功: {action}, 参数: {params}, 响应: {response_data}"
-                    )
+                    # 参数里可能带 token / cookie / 用户内容，成功日志降到 DEBUG
+                    logger.debug(f"调用自定义API成功: {action}, 参数: {params}")
                     return {
                         "status": "ok",
                         "data": response_data.get("data"),
@@ -189,21 +297,20 @@ class LunarBot:
 
     async def _handle_message_event(self, event: MessageEvent):
         event.log_event()
+        self._refresh_runtime_config()
         if isinstance(event, (GroupMessageEvent, PrivateMessageEvent)):
             self.message_count["received"] += 1
 
-        trigger_keyword = self.config.get("trigger_keyword", "/")
+        trigger_keyword = self.config.get("trigger_keyword", "$")
         # 命令判定仅基于文本段拼接：忽略 reply/at/图片等非文本段，
         # 否则引用（回复）消息开头的 "[回复]" 占位符会让 "$xxx" 判定失败
         message_text = "".join(seg.text for seg in event.message if isinstance(seg, TextSegment))
 
         logger.debug(f"处理消息事件: 原始消息='{message_text}', 触发词='{trigger_keyword}'")
 
-        if message_text and message_text.startswith(trigger_keyword):
-            command_full = message_text[len(trigger_keyword) :].strip()
-            parts = command_full.split(" ", 1)
-            cmd = parts[0]
-            args = parts[1] if len(parts) > 1 else ""
+        parsed = parse_command(message_text, trigger_keyword)
+        if parsed is not None:
+            cmd, args = parsed
 
             event.is_command = True
             event.command = cmd
@@ -272,15 +379,26 @@ class LunarBot:
         }
 
     def _check_permission(self, user_id: int | None, required_level: str = "manager") -> bool:
+        # 管理员名单可能在 WebUI 里刚改过，权限判断前先热加载
+        self._refresh_runtime_config()
+        if user_id is None:
+            return False
+
         root_user = self.config.get("root_user")
-        if user_id == root_user:
+        # 0 表示“未设置根管理员”，不能把 user_id=0 当成管理员
+        if (
+            isinstance(root_user, int)
+            and not isinstance(root_user, bool)
+            and root_user > 0
+            and user_id == root_user
+        ):
             return True
+
+        super_users = self._coerce_user_ids(self.config.get("super_users", []))
         if required_level == "super":
-            return user_id in self.config.get("super_users", [])
-        else:
-            return user_id in self.config.get("manager_users", []) or user_id in self.config.get(
-                "super_users", []
-            )
+            return user_id in super_users
+        manager_users = self._coerce_user_ids(self.config.get("manager_users", []))
+        return user_id in manager_users or user_id in super_users
 
     async def _show_help(self, args: str, event: Event) -> bool:
         logger.info(f"调用 _show_help 方法，args='{args}'")
@@ -430,23 +548,30 @@ class LunarBot:
 
         return True
 
-    async def run(self):
+    async def run(self) -> bool:
         logger.info("Lunar X 机器人启动中...")
         if not await self.connection.connect():
             logger.error("连接失败，退出程序")
-            return
-        await self._handle_restart_info()
-        self.plugin_manager.load_plugins()
-        self.plugins = self.plugin_manager.plugins
-        if self.config.get("auto_reload_plugins") is True:
-            self.plugin_manager.start_file_monitoring()
+            return False
 
-        await self._handle_plugin_event(Events.LunarStartListen())
+        try:
+            await self._handle_restart_info()
+            self.plugin_manager.load_plugins()
+            self.plugins = self.plugin_manager.plugins
+            if self.config.get("auto_reload_plugins") is True:
+                self.plugin_manager.start_file_monitoring()
 
-        await self._listen_events()
+            await self._handle_plugin_event(Events.LunarStartListen())
+
+            await self._listen_events()
+            return True
+        finally:
+            # 监听被取消或正常结束时都要释放 aiohttp / websocket 资源
+            with contextlib.suppress(Exception):
+                await self.connection.close()
 
     async def _handle_restart_info(self):
-        restart_info_file = os.path.abspath("restart_info.json")
+        restart_info_file = self._restart_info_path()
 
         if not os.path.exists(restart_info_file):
             logger.info("未找到重启信息文件")
@@ -727,6 +852,10 @@ class LunarBot:
         await self._handle_plugin_event(Events.LunarStopListen())
 
         try:
+            # 先让插件释放自己的 aiohttp session / SQLite 连接 / 定时任务
+            if hasattr(self.plugin_manager, "unload_plugins"):
+                await self.plugin_manager.unload_plugins()
+
             current_task = asyncio.current_task()
             tasks = [t for t in asyncio.all_tasks() if t is not current_task]
 
@@ -768,7 +897,7 @@ class LunarBot:
                 await self.send(response, user_id=user_id)
             return True
 
-        restart_info_file = os.path.abspath("restart_info.json")
+        restart_info_file = self._restart_info_path()
         restart_info = {
             "start_time": time.time(),
             "user_id": user_id,
@@ -777,11 +906,7 @@ class LunarBot:
         }
 
         try:
-            os.makedirs(os.path.dirname(restart_info_file), exist_ok=True)
-
-            with open(restart_info_file, "w", encoding="utf-8") as f:
-                json.dump(restart_info, f, indent=4, ensure_ascii=False)
-
+            atomic_write_json(restart_info_file, restart_info, mode=0o600)
             logger.info(f"重启信息已保存到: {restart_info_file}")
 
         except Exception as e:
@@ -890,17 +1015,10 @@ class LunarBot:
 
         try:
             new_manager = int(args)
-            managers = self.config.get("manager_users", [])
+            managers = list(self.config.get("manager_users", []))
             if new_manager not in managers:
-                with open("admin114.json", "r+", encoding="utf-8") as f:
-                    data = json.load(f)
-                    data["manager_users"] = [*managers, new_manager]
-                    f.seek(0)
-                    json.dump(data, f, indent=4, ensure_ascii=False)
-                    f.truncate()
-
+                self._update_admin_file(manager_users=[*managers, new_manager])
                 self.config["manager_users"] = [*managers, new_manager]
-
                 response = f"已添加用户 {new_manager} 为管理员"
             else:
                 response = f"用户 {new_manager} 已经是管理员"
@@ -932,18 +1050,11 @@ class LunarBot:
 
         try:
             remove_manager = int(args)
-            managers = self.config.get("manager_users", [])
+            managers = list(self.config.get("manager_users", []))
             if remove_manager in managers:
-                managers.remove(remove_manager)
-                with open("admin114.json", "r+", encoding="utf-8") as f:
-                    data = json.load(f)
-                    data["manager_users"] = managers
-                    f.seek(0)
-                    json.dump(data, f, indent=4, ensure_ascii=False)
-                    f.truncate()
-
-                self.config["manager_users"] = managers
-
+                remaining = [uid for uid in managers if uid != remove_manager]
+                self._update_admin_file(manager_users=remaining)
+                self.config["manager_users"] = remaining
                 response = f"已移除用户 {remove_manager} 的管理员权限"
             else:
                 response = f"用户 {remove_manager} 不是管理员"

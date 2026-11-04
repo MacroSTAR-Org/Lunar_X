@@ -1,0 +1,52 @@
+# ============================================================================
+# Caddy 反向代理配置示例（Lunar X WebUI）
+#
+# Caddy 自带自动 HTTPS，省掉证书签发与续期，比 Nginx 少很多配置。
+#
+# 用法：
+#   1. 替换 lunarx.example.com 为你的域名
+#   2. cp 本文件 /etc/caddy/Caddyfile
+#   3. caddy validate --config /etc/caddy/Caddyfile
+#   4. systemctl reload caddy
+#
+# 与应用侧的配合：
+#   LUNARX_TRUST_PROXY=1      让 Flask 信任 X-Forwarded-*
+#   LUNARX_COOKIE_SECURE=1     外层是 https，session cookie 要带 Secure
+#   LUNARX_ALLOWED_HOSTS=你的域名  限制 Host 头
+# ============================================================================
+
+lunarx.example.com {
+    encode zstd gzip
+
+    # 应用侧只监听本机，公网只暴露 443
+    reverse_proxy 127.0.0.1:5000 {
+        header_up Host              {host}
+        header_up X-Real-IP         {remote_host}
+        header_up X-Forwarded-For   {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host  {host}
+    }
+
+    # 插件安装的日志走 SSE，不能被缓冲
+    flush_interval -1
+
+    # 兜底的请求体上限（插件 ZIP 由应用端下载，不经此上传）
+    request_body {
+        max_size 64MB
+    }
+
+    # 登录接口限流
+    @login path /api/login
+    rate_limit @login {
+        zone lunarx_login {
+            key    {remote_host}
+            events 10
+            window 1m
+        }
+    }
+
+    log {
+        output file /var/log/caddy/lunarx.log
+        format json
+    }
+}

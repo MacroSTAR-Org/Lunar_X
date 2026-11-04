@@ -101,7 +101,13 @@ class MilkyTransport(BaseTransport):
                 )
                 logger.success("Milky 事件通道连接成功")
 
-                if is_reconnect and self._listener_task and not self._listener_task.done():
+                current_task = asyncio.current_task()
+                if (
+                    is_reconnect
+                    and self._listener_task
+                    and self._listener_task is not current_task
+                    and not self._listener_task.done()
+                ):
                     self._listener_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await self._listener_task
