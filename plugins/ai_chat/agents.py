@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
-from context import GroupTimeline, render_entries, time_context_line
+from context import GroupTimeline, get_cfg, get_cfg_int, render_entries, time_context_line
 
 # ---------------------------------------------------------------------------
 # 通用调用层
@@ -135,7 +135,7 @@ def build_reply_messages(
     messages.append({"role": "system", "content": " ".join(context_bits)})
 
     if timeline is not None:
-        excerpt = timeline.render(budget_chars=int(cfg.get("listen.max_chars", 2500) or 2500))
+        excerpt = timeline.render(budget_chars=int(get_cfg(cfg, "listen.max_chars", 2500) or 2500))
         if excerpt:
             messages.append(
                 {
@@ -315,7 +315,7 @@ async def call_planner(
     proactive_mode: str,
 ) -> list[PlannedAction]:
     """规划器：对增量消息给出动作判定。任何失败都由调用方按"忽略本批"处理。"""
-    budget = int(cfg.get("planner.max_context_chars", 3000) or 3000)
+    budget = int(get_cfg(cfg, "planner.max_context_chars", 3000) or 3000)
     incremental = _render_timeline_slice(timeline, since_seq, budget)
     if not incremental.strip():
         return [PlannedAction(type="ignore")]
@@ -386,15 +386,95 @@ async def call_replier(
     model: str,
     cfg: dict[str, Any],
     messages: list[dict[str, Any]],
+    *,
+    tools: list[dict[str, Any]] | None = None,
+    tool_ctx: Any | None = None,
+    bot: Any | None = None,
 ) -> str:
-    payload = {
+    """回复器：带可选的 function calling 循环。
+
+    tools 非空时模型可以调用插件工具（来自 bot.tools 注册表）：
+    每轮把 tool_calls 执行结果回填进对话，直到模型给出纯文本结论或
+    轮次/次数上限。工具的权限、超时、审计都在注册表里兜底。
+    """
+    payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "temperature": _temperature(cfg, 1.0),
         "max_tokens": _max_tokens(cfg),
     }
-    data = await _post_chat(session, api_base, api_key, payload, timeout=90)
-    return _assistant_content(data)
+    max_rounds = get_cfg_int(cfg, "agent.max_rounds", 6, 1, 12)
+    max_tool_calls = get_cfg_int(cfg, "agent.max_tool_calls", 12, 1, 40)
+
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+
+    tool_calls_used = 0
+    for _ in range(max_rounds):
+        data = await _post_chat(session, api_base, api_key, payload, timeout=90)
+        calls = _tool_calls(data) if tools else []
+        content = _assistant_content(data)
+
+        if not calls:
+            return content
+        if tool_calls_used >= max_tool_calls:
+            return content or "（工具调用次数已达上限，任务中止）"
+
+        # 模型要调工具：把 assistant 消息（含 tool_calls）原样回填，
+        # 再逐个执行并把结果以 tool 角色追加
+        assistant_message = data["choices"][0]["message"]
+        messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_message.get("content") or "",
+                "tool_calls": calls,
+            }
+        )
+        for call in calls:
+            fn = call.get("function", {})
+            name = str(fn.get("name", ""))
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            if not isinstance(args, dict):
+                args = {"_raw": str(args)[:200]}
+
+            is_admin = bool(
+                bot and tool_ctx is not None
+                and bot._check_permission(tool_ctx.user_id, "manager")
+            )
+            assert bot is not None and tool_ctx is not None  # 走到这说明 tools 已启用
+            result = await bot.tools.execute(
+                name, args, tool_ctx, is_admin=is_admin, log=getattr(bot, "plugin_logger", None)
+            )
+            tool_calls_used += 1
+            messages.append(
+                {"role": "tool", "tool_call_id": call.get("id", ""), "content": result}
+            )
+
+            # 截图闭环：工具把画面 data URL 放进了 tool_ctx.images，
+            # 这里作为图片消息注入，模型才能真正"看到"屏幕
+            if tool_ctx is not None and getattr(tool_ctx, "images", None):
+                image_parts = [
+                    {"type": "image_url", "image_url": {"url": url}}
+                    for url in tool_ctx.images
+                ]
+                tool_ctx.images.clear()
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "（这是刚才截取的屏幕画面，请据此继续任务）"},
+                            *image_parts,
+                        ],
+                    }
+                )
+        payload["messages"] = messages
+
+    # 轮次用尽：取最后一次的模型输出兜底
+    return "（任务未在限定轮次内完成，以上是目前的进展）"
 
 
 async def call_vision(

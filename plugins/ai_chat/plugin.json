@@ -132,6 +132,30 @@
       "default": true,
       "hint": "多智能体管线调用失败时自动回退单模型直答，保证不失联"
     },
+    {
+      "key": "agent.enabled",
+      "label": "启用工具调用（function calling）",
+      "type": "bool",
+      "default": false,
+      "hint": "开启后模型可调用插件注册的工具（如 Computer Use）；需要模型支持 function calling"
+    },
+    {
+      "key": "agent.max_rounds",
+      "label": "工具循环轮数上限",
+      "type": "int",
+      "default": 6,
+      "min": 1,
+      "max": 12,
+      "hint": "一次对话里模型最多几轮『调工具→看结果』的往复"
+    },
+    {
+      "key": "agent.max_tool_calls",
+      "label": "单次对话工具调用上限",
+      "type": "int",
+      "default": 12,
+      "min": 1,
+      "max": 40
+    },
 
     { "key": "listen.enabled", "label": "旁听群聊", "type": "bool", "default": true,
       "hint": "构建群共享上下文；只存内存，重启即清，绝不落盘" },

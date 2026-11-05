@@ -14,6 +14,7 @@ import re
 import time
 
 # 复用 agents 的 markdown 清理，语义上同属"把模型腔调成群友腔"
+import context as ctx
 from agents import strip_markdown_noise
 
 # 一批常用、语义中性的 QQ 小黄脸，随回复随机带上
@@ -77,7 +78,7 @@ def split_reply(text: str, max_chars: int = 80) -> list[str]:
 
 def style_hint(cfg: dict) -> str:
     """注入 system 的说话方式约束——风格层开启时让模型直接说人话。"""
-    if not cfg.get("style.enabled"):
+    if not ctx.get_cfg(cfg, "style.enabled"):
         return ""
     return (
         "你的回复会直接发在 QQ 群里：像群友聊天一样口语化，"
@@ -89,7 +90,7 @@ def style_hint(cfg: dict) -> str:
 def pick_face(cfg: dict) -> dict | None:
     """按 face_chance 概率返回一个表情段 dict；未命中返回 None。"""
     try:
-        chance = float(cfg.get("style.face_chance", 0) or 0)
+        chance = float(ctx.get_cfg(cfg, "style.face_chance", 0) or 0)
     except (TypeError, ValueError):
         chance = 0.0
     if chance <= 0 or random.random() >= chance:
@@ -103,12 +104,12 @@ async def send_like_human(bot, cfg: dict, text: str, *, group_id: int | None, us
     if not text:
         return
 
-    if not cfg.get("style.enabled"):
+    if not ctx.get_cfg(cfg, "style.enabled"):
         await bot.send(text, group_id=group_id, user_id=user_id)
         return
 
     is_group = group_id is not None
-    segments = split_reply(text, max_chars=int(cfg.get("style.max_segment_chars", 80) or 80))
+    segments = split_reply(text, max_chars=int(ctx.get_cfg(cfg, "style.max_segment_chars", 80) or 80))
 
     if is_group:
         await asyncio.sleep(typing_delay_seconds(text))
@@ -135,12 +136,12 @@ def speak_allowed(cfg: dict) -> bool:
     event 档的定位是"事件反应 + 被间接点名时接话"，不主动开话题；
     真正主动插话是 event+timer 档的特权。
     """
-    return str(cfg.get("proactive.mode", "event")) == "event+timer"
+    return str(ctx.get_cfg(cfg, "proactive.mode", "event")) == "event+timer"
 
 
 def in_quiet_hours(cfg: dict, now: float | None = None) -> bool:
     """静音时段判定，配置形如 "01:00-08:00"；解析失败视为不在静音期。"""
-    raw = str(cfg.get("proactive.quiet_hours", "01:00-08:00") or "").strip()
+    raw = str(ctx.get_cfg(cfg, "proactive.quiet_hours", "01:00-08:00") or "").strip()
     match = re.fullmatch(r"(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})", raw)
     if not match:
         return False
@@ -187,7 +188,7 @@ _last_chime: dict[int, float] = {}
 def chime_allowed(group_id: int, cfg: dict) -> bool:
     """唤醒词"居中被提及"时的概率接话，受概率与每群冷却双重约束。"""
     try:
-        chance = float(cfg.get("proactive.chime_chance", 0.3) or 0)
+        chance = float(ctx.get_cfg(cfg, "proactive.chime_chance", 0.3) or 0)
     except (TypeError, ValueError):
         chance = 0.3
     if chance <= 0:

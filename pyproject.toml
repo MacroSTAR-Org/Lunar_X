@@ -40,6 +40,13 @@ full = [
 serve = [
     "waitress>=3.0",
 ]
+# Computer Use 插件：鼠标键盘控制与截屏。
+# macOS 需在「系统设置 → 隐私与安全性」授予运行进程
+# 「辅助功能」与「屏幕录制」权限；Linux 无桌面时相关工具自动降级报错。
+computer = [
+    "pyautogui>=0.9.54",
+    "pillow>=10.0",
+]
 windows = [
     # Windows 桌面 WebUI 与系统集成
     "PySide6>=6.6",

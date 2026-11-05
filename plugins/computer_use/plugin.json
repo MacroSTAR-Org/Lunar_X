@@ -1,0 +1,56 @@
+{
+  "name": "computer_use",
+  "display_name": "Computer Use（操作电脑）",
+  "version": "1.0.0",
+  "author": "MacroSTAR",
+  "description": "让机器人真正能干活：工作空间内执行命令/读写文件，截屏并理解画面，控制鼠标键盘（移植自 MaiBot 的 xigua_computer-use-plugin）",
+  "config": [
+    {
+      "key": "enabled",
+      "label": "启用 Computer Use",
+      "type": "bool",
+      "default": true,
+      "hint": "总开关；关闭后工具仍注册但不执行"
+    },
+    {
+      "key": "computer.allowed_users",
+      "label": "可用用户白名单",
+      "type": "int_list",
+      "default": [],
+      "hint": "留空 = 仅超级用户/管理员可用。这是整个插件最关键的安全边界"
+    },
+
+    { "key": "workspace.root", "label": "工作空间根目录", "type": "string",
+      "default": "~/computer_use_workspace",
+      "placeholder": "~/computer_use_workspace",
+      "hint": "文件读写与命令执行的根目录" },
+    { "key": "workspace.allow_outside", "label": "允许访问工作空间以外", "type": "bool",
+      "default": false,
+      "hint": "有风险，谨慎开启" },
+
+    { "key": "command.timeout", "label": "命令超时（秒）", "type": "int",
+      "default": 60, "min": 1, "max": 600 },
+    { "key": "command.max_output_chars", "label": "输出截断（字符）", "type": "int",
+      "default": 4000, "min": 200, "max": 20000,
+      "hint": "回传给模型的最大输出长度" },
+    { "key": "command.deny_patterns", "label": "禁止命令片段", "type": "string_list",
+      "default": ["sudo", "rm -rf /", "shutdown", "reboot", "mkfs", "dd if=", ":(){"],
+      "hint": "命令里含这些片段就拒绝执行（尽力而为的兜底）" },
+
+    { "key": "input.enabled", "label": "启用鼠标键盘控制", "type": "bool",
+      "default": true,
+      "hint": "第二档能力：需要 pyautogui 与 macOS 辅助功能权限" },
+    { "key": "input.move_duration", "label": "鼠标移动动画（厘秒）", "type": "int",
+      "default": 25, "min": 0, "max": 300 },
+    { "key": "input.type_interval", "label": "逐字输入间隔（厘秒）", "type": "int",
+      "default": 20, "min": 0, "max": 1000 },
+
+    { "key": "screenshot.enabled", "label": "启用截图", "type": "bool",
+      "default": true,
+      "hint": "截图会发送到当前聊天，并回传给模型看屏幕" },
+    { "key": "screenshot.max_width", "label": "截图最大宽度（像素）", "type": "int",
+      "default": 1280, "min": 320, "max": 3840 },
+    { "key": "screenshot.quality", "label": "JPEG 质量", "type": "int",
+      "default": 85, "min": 30, "max": 100 }
+  ]
+}

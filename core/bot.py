@@ -83,6 +83,10 @@ class LunarBot:
         self.plugin_logger = logger.get_logger("LunarPlugins")
         self.msg = MessageBuilder(self)
         self.diy = DiyAPI(self)
+        # 插件工具注册表：插件向 LLM 暴露 function calling 工具（见 core/tools.py）
+        from .tools import ToolRegistry
+
+        self.tools = ToolRegistry()
         # 插件私有配置的 mtime 缓存：{插件名: (config.json 的 mtime, 合并后的配置)}
         # 有它才能做到 WebUI 改完配置下一条消息就生效，不必重启
         self._plugin_cfg_cache: dict[str, Any] = {}

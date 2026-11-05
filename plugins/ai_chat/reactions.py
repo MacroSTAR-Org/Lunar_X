@@ -86,7 +86,7 @@ async def handle_notice(
     group_id: int = getattr(event, "group_id", 0) or 0
 
     # ---- 被戳回戳 -------------------------------------------------------
-    if cls_name == "GroupPokeNoticeEvent" and cfg.get("react.poke_back"):
+    if cls_name == "GroupPokeNoticeEvent" and ctx.get_cfg(cfg, "react.poke_back"):
         if getattr(event, "target_id", None) != getattr(event, "self_id", None):
             return False
         if not _cooldown_ok("poke", group_id):
@@ -103,7 +103,7 @@ async def handle_notice(
         return True
 
     # ---- 撤回调侃 -------------------------------------------------------
-    if cls_name == "GroupRecallNoticeEvent" and cfg.get("react.recall_tease"):
+    if cls_name == "GroupRecallNoticeEvent" and ctx.get_cfg(cfg, "react.recall_tease"):
         if timeline is None:
             return False  # 旁听没开就无从知道原文，保持沉默
         if random.random() >= RECALL_TEASE_CHANCE:
@@ -126,10 +126,10 @@ async def handle_notice(
         return True
 
     # ---- 入群欢迎 -------------------------------------------------------
-    if cls_name == "GroupIncreaseNoticeEvent" and cfg.get("react.welcome"):
+    if cls_name == "GroupIncreaseNoticeEvent" and ctx.get_cfg(cfg, "react.welcome"):
         if not _cooldown_ok("welcome", group_id):
             return False
-        templates = cfg.get("react.welcome_templates") or []
+        templates = ctx.get_cfg(cfg, "react.welcome_templates") or []
         templates = [t for t in templates if t and t.strip()] or list(DEFAULT_WELCOME_TEMPLATES)
         name = f"用户{event.user_id}"
         raw = getattr(event, "raw_data", {}) or {}

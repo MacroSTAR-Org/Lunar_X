@@ -41,6 +41,7 @@ from core.events import (
     GroupRecallNoticeEvent,
     MessageEvent,
 )
+from core.tools import ToolCallContext
 
 _session = None
 _histories: dict[str, list[dict[str, Any]]] = {}
@@ -301,10 +302,10 @@ def _ensure_debouncer(cfg) -> ctx.ReviewDebouncer:
     global _debouncer
     if _debouncer is None:
         _debouncer = ctx.ReviewDebouncer(_review_group)
-    _debouncer.quiet_seconds = _coerce_int(cfg.get("planner.quiet_seconds", 20), 20, 5, 300)
-    _debouncer.batch_max = _coerce_int(cfg.get("planner.batch_max", 12), 12, 3, 50)
+    _debouncer.quiet_seconds = _coerce_int(ctx.get_cfg(cfg, "planner.quiet_seconds", 20), 20, 5, 300)
+    _debouncer.batch_max = _coerce_int(ctx.get_cfg(cfg, "planner.batch_max", 12), 12, 3, 50)
     _debouncer.max_wait_seconds = _coerce_int(
-        cfg.get("planner.max_wait_seconds", 120), 120, 30, 600
+        ctx.get_cfg(cfg, "planner.max_wait_seconds", 120), 120, 30, 600
     )
     return _debouncer
 
@@ -314,12 +315,12 @@ def _timeline_for(bot, cfg, event) -> ctx.GroupTimeline | None:
     group_id = getattr(event, "group_id", None)
     if not group_id or str(cfg.get("mode", "agent")) != "agent":
         return None
-    if not cfg.get("listen.enabled", True):
+    if not ctx.get_cfg(cfg, "listen.enabled", True):
         return None
     return ctx.get_timeline(
         group_id,
-        max_entries=_coerce_int(cfg.get("listen.max_entries", 30), 30, 10, 100),
-        ttl_minutes=_coerce_int(cfg.get("listen.ttl_minutes", 120), 120, 10, 360),
+        max_entries=_coerce_int(ctx.get_cfg(cfg, "listen.max_entries", 30), 30, 10, 100),
+        ttl_minutes=_coerce_int(ctx.get_cfg(cfg, "listen.ttl_minutes", 120), 120, 10, 360),
     )
 
 
@@ -361,11 +362,11 @@ async def _handle_notice_event(event, bot) -> bool:
 
     group_id = getattr(event, "group_id", None)
     timeline = None
-    if group_id and str(cfg.get("mode", "agent")) == "agent" and cfg.get("listen.enabled", True):
+    if group_id and str(cfg.get("mode", "agent")) == "agent" and ctx.get_cfg(cfg, "listen.enabled", True):
         timeline = ctx.get_timeline(
             group_id,
-            max_entries=_coerce_int(cfg.get("listen.max_entries", 30), 30, 10, 100),
-            ttl_minutes=_coerce_int(cfg.get("listen.ttl_minutes", 120), 120, 10, 360),
+            max_entries=_coerce_int(ctx.get_cfg(cfg, "listen.max_entries", 30), 30, 10, 100),
+            ttl_minutes=_coerce_int(ctx.get_cfg(cfg, "listen.ttl_minutes", 120), 120, 10, 360),
         )
         description = reactions_mod.describe_notice(event)
         if description:
@@ -397,7 +398,7 @@ async def _agent_reply(
     group_id_ref = getattr(event, "group_id", None)
 
     has_images = bool(vision.collect_image_segments(getattr(event, "message", [])))
-    use_vision = has_images and (cfg.get("vision.enabled") or force_vision)
+    use_vision = has_images and (ctx.get_cfg(cfg, "vision.enabled") or force_vision)
 
     # 本次请求的 user content：普通文本 或 [文本 + 图片片段]
     if use_vision:
@@ -418,12 +419,12 @@ async def _agent_reply(
     history = [m for m in _histories.get(key, []) if m.get("role") != "system"]
 
     memory_lines: list[str] = []
-    if cfg.get("memory.enabled"):
+    if ctx.get_cfg(cfg, "memory.enabled"):
         with contextlib.suppress(Exception):
             memory_lines = memory_store.recall_facts(event.user_id, question or "[图片]")
 
     style_samples: list[str] | None = None
-    if cfg.get("style.quote_fewshot") and group_id_ref:
+    if ctx.get_cfg(cfg, "style.quote_fewshot") and group_id_ref:
         with contextlib.suppress(Exception):
             style_samples = style.quote_fewshot_lines(group_id_ref) or None
 
@@ -437,8 +438,26 @@ async def _agent_reply(
         style_hint=style.style_hint(cfg),
         style_samples=style_samples,
     )
+
+    # ---- 工具调用（agent 能力）：注册表有工具且配置开启时进入 function calling ----
+    tools: list[dict[str, Any]] | None = None
+    tool_ctx: ToolCallContext | None = None
+    if ctx.get_cfg(cfg, "agent.enabled", False) and len(bot.tools) > 0:
+        tools = bot.tools.openapi_schemas()
+        tool_ctx = ToolCallContext(
+            user_id=int(event.user_id or 0), group_id=group_id_ref
+        )
+
     reply = await agents.call_replier(
-        _session_ref(), api_base, api_key, model, cfg, messages
+        _session_ref(),
+        api_base,
+        api_key,
+        model,
+        cfg,
+        messages,
+        tools=tools,
+        tool_ctx=tool_ctx,
+        bot=bot,
     )
 
     # 历史只存占位（vision 片段不进历史），修剪逻辑与 classic 一致
@@ -463,7 +482,7 @@ def _remember_turn(key: str, question: str, reply: str, cfg) -> None:
 
 def _maybe_extract_memory(event, cfg, user_text: str, reply_text: str) -> None:
     """记忆抽取：显式开启才落盘，60s 限流，后台异步不阻塞消息派发。"""
-    if not cfg.get("memory.enabled"):
+    if not ctx.get_cfg(cfg, "memory.enabled"):
         return
     user_text = (user_text or "").strip()
     reply_text = (reply_text or "").strip()
@@ -492,10 +511,10 @@ def _maybe_extract_memory(event, cfg, user_text: str, reply_text: str) -> None:
                 memory_store.add_fact(
                     event.user_id, fact.get("kind", "fact"), fact.get("content", ""), group_id
                 )
-        max_per_user = _coerce_int(cfg.get("memory.max_per_user", 100), 100, 10, 500)
+        max_per_user = _coerce_int(ctx.get_cfg(cfg, "memory.max_per_user", 100), 100, 10, 500)
         with contextlib.suppress(Exception):
             memory_store.enforce_max_per_user(event.user_id, max_per_user)
-        retention = _coerce_int(cfg.get("memory.retention_days", 90), 90, 0, 365)
+        retention = _coerce_int(ctx.get_cfg(cfg, "memory.retention_days", 90), 90, 0, 365)
         with contextlib.suppress(Exception):
             memory_store.lazy_daily_purge(retention)
 
@@ -516,7 +535,7 @@ async def _review_group(group_id: int) -> None:
         if timeline is not None:
             timeline.drop_pending()
         return
-    if not cfg.get("planner.enabled", True):
+    if not ctx.get_cfg(cfg, "planner.enabled", True):
         timeline = ctx._timelines.get(group_id)
         if timeline is not None:
             timeline.drop_pending()
@@ -534,7 +553,7 @@ async def _review_group(group_id: int) -> None:
     planner_model = agents.resolve_model(
         cfg, "planner.model", cfg.get("model") or "gpt-3.5-turbo"
     )
-    proactive_mode = str(cfg.get("proactive.mode", "event"))
+    proactive_mode = str(ctx.get_cfg(cfg, "proactive.mode", "event"))
 
     try:
         actions = await agents.call_planner(
@@ -646,7 +665,7 @@ async def _bubble_loop() -> None:
             if bot is None:
                 continue
             cfg = _cfg(bot)
-            if str(cfg.get("proactive.mode", "event")) != "event+timer":
+            if str(ctx.get_cfg(cfg, "proactive.mode", "event")) != "event+timer":
                 continue
             if style.in_quiet_hours(cfg):
                 continue
@@ -728,7 +747,7 @@ async def on_message(event, bot):
     # ---- $ai 忘了我：清除本人长期记忆 ----
     if is_command and (getattr(event, "args", "") or "").strip() in ("忘了我", "忘记我"):
         forget_uid: int = int(event.user_id or 0)
-        if not cfg.get("memory.enabled"):
+        if not ctx.get_cfg(cfg, "memory.enabled"):
             await bot.send("我还没有开启长期记忆哦", user_id=forget_uid, group_id=group_id)
             return True
         deleted = memory_store.forget_user(forget_uid)
@@ -755,7 +774,7 @@ async def on_message(event, bot):
         except agents.AgentError as e:
             bot.plugin_logger.warning(f"agent 管线失败: {e}")
             reply = None
-        if reply is None and cfg.get("agent.fallback_classic", True):
+        if reply is None and ctx.get_cfg(cfg, "agent.fallback_classic", True):
             reply = await _ask_ai(bot, cfg, event, question or "")
     else:
         reply = await _ask_ai(bot, cfg, event, question)

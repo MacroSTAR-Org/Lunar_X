@@ -160,6 +160,49 @@ class GroupTimeline:
 _timelines: OrderedDict[int, GroupTimeline] = OrderedDict()
 
 
+def get_cfg(cfg: dict, dotted: str, default: Any = None) -> Any:
+    """读插件配置的兼容助手：支持嵌套 dict 与平铺点号键两种形态。
+
+    plugin.json 里 "a.b" 形式的 key，经 plugin_config.merge_defaults 之后
+    变成嵌套结构 {"a": {"b": ...}}（WebUI 表单也按嵌套存），
+    所以运行时必须走嵌套读取；平铺回退只是让手写配置和测试
+    不用关心两种形态。嵌套优先：两种形态同时存在时以嵌套为准。
+    """
+    cur: Any = cfg
+    for part in dotted.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return cfg.get(dotted, default)
+        cur = cur[part]
+    return cur
+
+
+def get_cfg_int(cfg: dict, dotted: str, default: int, lo: int | None = None,
+                hi: int | None = None) -> int:
+    """get_cfg 的整数版：坏值回落默认，可夹取值范围。"""
+    try:
+        value = int(get_cfg(cfg, dotted, default))
+    except (TypeError, ValueError):
+        return default
+    if lo is not None:
+        value = max(lo, value)
+    if hi is not None:
+        value = min(hi, value)
+    return value
+
+
+def get_cfg_float(cfg: dict, dotted: str, default: float, lo: float | None = None,
+                  hi: float | None = None) -> float:
+    try:
+        value = float(get_cfg(cfg, dotted, default))
+    except (TypeError, ValueError):
+        return default
+    if lo is not None:
+        value = max(lo, value)
+    if hi is not None:
+        value = min(hi, value)
+    return value
+
+
 def get_timeline(group_id: int, max_entries: int = 30, ttl_minutes: int = 120) -> GroupTimeline:
     """取（或建）一个群的时间线；参数热更新时在原对象上调整，游标不丢。"""
     timeline = _timelines.get(group_id)

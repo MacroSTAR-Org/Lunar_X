@@ -15,6 +15,7 @@ sys.path.insert(0, str(_PLUGIN))
 import context as ctx
 import reactions as reactions_mod
 import setup as ai_setup  # 必须在 sys.path 插入后立刻导入：
+
 # plugins/tools 也有 setup.py，运行期再导入会被它的路径抢先
 import style
 
