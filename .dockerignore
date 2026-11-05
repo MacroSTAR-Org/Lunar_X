@@ -1,0 +1,23 @@
+.git
+.github
+.venv
+.ruff_cache
+.workbuddy
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+
+# 运行时机密与状态，绝不能进镜像
+config.json
+admin114.json
+appsettings.json
+webui.json
+webui.initial_password
+logs
+data
+uploads
+
+tests

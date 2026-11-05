@@ -156,6 +156,15 @@
       "min": 1,
       "max": 40
     },
+    {
+      "key": "agent.max_pending_replies",
+      "label": "单会话待回复上限",
+      "type": "int",
+      "default": 3,
+      "min": 1,
+      "max": 16,
+      "hint": "慢模型期间同一群/私聊最多排队几条回复，超出直接丢弃，防止任务无限堆积"
+    },
 
     { "key": "listen.enabled", "label": "旁听群聊", "type": "bool", "default": true,
       "hint": "构建群共享上下文；只存内存，重启即清，绝不落盘" },

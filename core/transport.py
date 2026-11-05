@@ -10,6 +10,57 @@ import websockets
 
 from .logger import logger
 
+# 事件队列上限。聊天机器人不需要无限积压：消费端卡住时，旧消息已经失去
+# 回复价值，继续堆只会吃内存。满队列丢最旧的，保证 WebSocket 读取永不阻塞。
+DEFAULT_EVENT_QUEUE_SIZE = 1024
+
+
+class BoundedEventQueue:
+    """有界事件队列：满时丢弃最旧事件并计数，而不是反压 WebSocket 读取。"""
+
+    def __init__(self, maxsize: int = DEFAULT_EVENT_QUEUE_SIZE):
+        self.maxsize = max(1, int(maxsize))
+        self._queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=self.maxsize)
+        self.dropped = 0
+
+    async def put(self, item: Any) -> None:
+        while True:
+            try:
+                self._queue.put_nowait(item)
+                return
+            except asyncio.QueueFull:
+                try:
+                    self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    continue
+                self.dropped += 1
+                if self.dropped == 1 or self.dropped % 100 == 0:
+                    logger.warning(
+                        f"事件队列已满（上限 {self.maxsize}），"
+                        f"已丢弃 {self.dropped} 条最旧事件"
+                    )
+
+    async def get(self) -> Any:
+        return await self._queue.get()
+
+    def get_nowait(self) -> Any:
+        return self._queue.get_nowait()
+
+    def empty(self) -> bool:
+        return self._queue.empty()
+
+    def qsize(self) -> int:
+        return self._queue.qsize()
+
+    def stop(self) -> None:
+        """清空积压并放入停止哨兵（None）。"""
+        while True:
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        self._queue.put_nowait(None)
+
 
 class BaseTransport:
     """传输层抽象：事件接收 + API 调用。
@@ -17,6 +68,16 @@ class BaseTransport:
     协议适配器（OneBotAdapter / MilkyAdapter）依赖本接口，
     bot 核心只通过适配器访问协议，不直接感知协议细节。
     """
+
+    _message_queue: BoundedEventQueue
+
+    def queue_stats(self) -> dict[str, int]:
+        """事件队列的深度/上限/累计丢弃数，供运行统计与排障使用。"""
+        return {
+            "size": self._message_queue.qsize(),
+            "maxsize": self._message_queue.maxsize,
+            "dropped": self._message_queue.dropped,
+        }
 
     async def connect(self, is_reconnect: bool = False) -> bool:
         raise NotImplementedError
@@ -47,6 +108,7 @@ class MilkyTransport(BaseTransport):
         token: str | None = None,
         max_retries: int = 5,
         request_timeout: float = 30.0,
+        queue_maxsize: int = DEFAULT_EVENT_QUEUE_SIZE,
     ):
         self.server_url = server_url.rstrip("/")
         self.token = token
@@ -55,7 +117,7 @@ class MilkyTransport(BaseTransport):
         self.websocket = None
         self._session: aiohttp.ClientSession | None = None
         self._listener_task: asyncio.Task | None = None
-        self._message_queue: asyncio.Queue = asyncio.Queue()
+        self._message_queue = BoundedEventQueue(queue_maxsize)
         self._is_closing = False
 
     @property
@@ -165,6 +227,12 @@ class MilkyTransport(BaseTransport):
                 except Exception as e:
                     logger.error(f"监听器处理消息时发生未知错误: {e}, 消息: {message[:200]}...")
 
+            # 新版 websockets 的 async for 在连接关闭时正常结束，不抛
+            # ConnectionClosed；这里必须显式触发重连，否则会静默失联。
+            if not self._is_closing:
+                logger.info("Milky 事件通道已关闭 (迭代结束)")
+                await self._reconnect_loop()
+
         except websockets.exceptions.ConnectionClosed:
             logger.info("Milky 事件通道已关闭 (意外断开或服务器关闭)")
             if not self._is_closing:
@@ -181,10 +249,7 @@ class MilkyTransport(BaseTransport):
         finally:
             logger.info("_listen_loop 结束。")
             if self._is_closing:
-                while not self._message_queue.empty():
-                    with contextlib.suppress(asyncio.QueueEmpty):
-                        self._message_queue.get_nowait()
-                await self._message_queue.put(None)
+                self._message_queue.stop()
 
     async def listen(self) -> AsyncIterator[dict[str, Any]]:
         try:
@@ -309,10 +374,5 @@ class MilkyTransport(BaseTransport):
         if self._session and not self._session.closed:
             await self._session.close()
 
-        for _ in range(self._message_queue.qsize()):
-            try:
-                self._message_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-        await self._message_queue.put(None)
+        self._message_queue.stop()
         logger.info("Milky 传输层已关闭")

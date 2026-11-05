@@ -8,7 +8,7 @@ from typing import Any
 import websockets
 
 from .logger import logger
-from .transport import BaseTransport
+from .transport import DEFAULT_EVENT_QUEUE_SIZE, BaseTransport, BoundedEventQueue
 
 
 class WebSocketConnection(BaseTransport):
@@ -18,6 +18,7 @@ class WebSocketConnection(BaseTransport):
         token: str | None = None,
         max_retries: int = 5,
         request_timeout: float = 30.0,
+        queue_maxsize: int = DEFAULT_EVENT_QUEUE_SIZE,
     ):
         self.ws_url = ws_url
         self.token = token
@@ -26,7 +27,7 @@ class WebSocketConnection(BaseTransport):
         self._pending_requests: dict[str, asyncio.Future[Any]] = {}
         self._request_timeout = request_timeout
         self._listener_task: asyncio.Task | None = None
-        self._message_queue: asyncio.Queue = asyncio.Queue()
+        self._message_queue = BoundedEventQueue(queue_maxsize)
         self._is_closing = False
 
     async def connect(self, is_reconnect: bool = False) -> bool:
@@ -162,6 +163,12 @@ class WebSocketConnection(BaseTransport):
                 except Exception as e:
                     logger.error(f"监听器处理消息时发生未知错误: {e}, 消息: {message[:200]}...")
 
+            # 新版 websockets 的 async for 在连接关闭时正常结束，不抛
+            # ConnectionClosed；这里必须显式触发重连，否则会静默失联。
+            if not self._is_closing:
+                logger.info("WebSocket连接已关闭 (迭代结束)")
+                await self._reconnect_loop()
+
         except websockets.exceptions.ConnectionClosed:
             logger.info("WebSocket连接已关闭 (意外断开或服务器关闭)")
             if not self._is_closing:
@@ -178,10 +185,7 @@ class WebSocketConnection(BaseTransport):
         finally:
             logger.info("_listen_loop 结束。")
             if self._is_closing:
-                while not self._message_queue.empty():
-                    with contextlib.suppress(asyncio.QueueEmpty):
-                        self._message_queue.get_nowait()
-                await self._message_queue.put(None)
+                self._message_queue.stop()
 
     async def listen(self) -> AsyncIterator[dict[str, Any]]:
         try:
@@ -320,7 +324,4 @@ class WebSocketConnection(BaseTransport):
                 future.set_exception(ConnectionError("WebSocket连接正在关闭"))
         self._pending_requests.clear()
 
-        while not self._message_queue.empty():
-            with contextlib.suppress(asyncio.QueueEmpty):
-                self._message_queue.get_nowait()
-        await self._message_queue.put(None)
+        self._message_queue.stop()

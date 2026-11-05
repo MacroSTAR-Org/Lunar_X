@@ -52,6 +52,13 @@ _bot: Any = None
 _debouncer: ctx.ReviewDebouncer | None = None
 _bubble_task: asyncio.Task | None = None
 
+# 每个会话同时只跑一个回复任务：LLM + 拟人打字延迟都在后台，
+# 不阻塞框架的事件循环；同群并发回复则按到达顺序串行，避免插话打乱。
+_reply_locks: dict[str, asyncio.Lock] = {}
+# 每个会话待处理的回复任务数。慢模型期间消息洪峰会不断堆积，
+# 必须设上限，否则后台任务和事件对象会无界增长。
+_reply_pending: dict[str, int] = {}
+
 # 记忆抽取限流：同一用户 60s 内只抽一次（每次抽取都是一次 LLM 调用）
 _last_extract: dict[int, float] = {}
 _EXTRACT_INTERVAL = 60
@@ -86,6 +93,8 @@ async def on_unload(bot):
     _background_tasks.clear()
     ctx.clear_all()
     reactions_mod.clear_state()
+    _reply_locks.clear()
+    _reply_pending.clear()
     _last_extract.clear()
     _bubble_quota.clear()
     memory_store.close_db()
@@ -690,6 +699,71 @@ async def _bubble_loop() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _conversation_key(event) -> str:
+    """同一个群/同一个私聊串行，不同会话互不影响。"""
+    group_id = getattr(event, "group_id", None)
+    if group_id:
+        return f"group:{group_id}"
+    return f"private:{getattr(event, 'user_id', 0)}"
+
+
+async def _reply_and_send(bot, cfg, event, question, timeline, agent_mode) -> None:
+    """在后台完成一次回复：LLM 调用、降级、拟人打字都不占用事件派发。
+
+    框架的插件分发是串行的，如果这里直接 await，一个慢模型会让整个 Bot
+    的其他插件（管理命令、定时任务）一起排队。
+    """
+    key = _conversation_key(event)
+    lock = _reply_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        try:
+            reply: str | None = None
+            if agent_mode:
+                try:
+                    reply = await _agent_reply(
+                        bot, cfg, event, question, timeline, "被直接点名"
+                    )
+                except agents.AgentError as e:
+                    bot.plugin_logger.warning(f"agent 管线失败: {e}")
+                    reply = None
+                if reply is None and ctx.get_cfg(cfg, "agent.fallback_classic", True):
+                    reply = await _ask_ai(bot, cfg, event, question)
+            else:
+                reply = await _ask_ai(bot, cfg, event, question)
+
+            if not reply:
+                return
+
+            if agent_mode:
+                await style.send_like_human(
+                    bot,
+                    cfg,
+                    reply,
+                    group_id=getattr(event, "group_id", None),
+                    user_id=event.user_id,
+                )
+                _maybe_extract_memory(event, cfg, question, reply)
+            else:
+                await bot.send(
+                    reply,
+                    group_id=getattr(event, "group_id", None),
+                    user_id=event.user_id,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                bot.plugin_logger.error(f"AI 回复任务失败: {e}")
+        finally:
+            remaining = _reply_pending.get(key, 1) - 1
+            if remaining > 0:
+                _reply_pending[key] = remaining
+            else:
+                _reply_pending.pop(key, None)
+                if _reply_locks.get(key) is lock:
+                    _reply_locks.pop(key, None)
+
+
 async def on_message(event, bot):
     """Any 触发的统一入口：消息走对话管线，通知走反应管线。"""
     global _bot
@@ -763,29 +837,17 @@ async def on_message(event, bot):
         await bot.send("用法: $ai <问题>", group_id=group_id, user_id=event.user_id)
         return True
 
-    # ---- 生成回复：agent 管线优先，失败按配置降级 classic ----
-    reply: str | None = None
-    if agent_mode:
-        try:
-            reply = await _agent_reply(
-                bot, cfg, event, question or _plain_text(bot, event), timeline,
-                "被直接点名",
-            )
-        except agents.AgentError as e:
-            bot.plugin_logger.warning(f"agent 管线失败: {e}")
-            reply = None
-        if reply is None and ctx.get_cfg(cfg, "agent.fallback_classic", True):
-            reply = await _ask_ai(bot, cfg, event, question or "")
-    else:
-        reply = await _ask_ai(bot, cfg, event, question)
-
-    if not reply:
+    # ---- 生成回复：后台任务执行，立即释放框架的事件派发 ----
+    key = _conversation_key(event)
+    pending_limit = _coerce_int(
+        ctx.get_cfg(cfg, "agent.max_pending_replies", 3), 3, 1, 16
+    )
+    pending = _reply_pending.get(key, 0)
+    if pending >= pending_limit:
+        bot.plugin_logger.warning(
+            f"会话 {key} 待回复任务已达上限 {pending_limit}，丢弃本条消息"
+        )
         return True
-
-    # classic 保持原样直发；agent 走风格层（未开启时同样退化为直发）
-    if agent_mode:
-        await style.send_like_human(bot, cfg, reply, group_id=group_id, user_id=event.user_id)
-        _maybe_extract_memory(event, cfg, question or "", reply)
-    else:
-        await bot.send(reply, group_id=group_id, user_id=event.user_id)
+    _reply_pending[key] = pending + 1
+    _spawn(_reply_and_send(bot, cfg, event, question or _plain_text(bot, event), timeline, agent_mode))
     return True

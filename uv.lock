@@ -736,6 +736,15 @@ wheels = [
 ]
 
 [[package]]
+name = "gunicorn"
+version = "26.2.0"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/d9/8a/e4ef6ee11701b6cd64702848415ffb69eeff85cb388a3c6c7fe86f22f3f8/gunicorn-26.2.0.tar.gz", hash = "sha256:62b864895d9ebff0b2f9867ba04fe811c93121596540830c9c916d0769668447" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/fe/85/7522a52e5e2f42faf1a129113ab63e548c42e103e9af395b7bfe65e403e2/gunicorn-26.2.0-py3-none-any.whl", hash = "sha256:bd249d0b3f7972f7432f0a6b6ff3b3ee2d129f70cd1ff6c09a9dd9e29a2b88e3" },
+]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
@@ -816,7 +825,6 @@ wheels = [
 
 [[package]]
 name = "lunar-x"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -844,6 +852,7 @@ full = [
     { name = "tqdm" },
 ]
 serve = [
+    { name = "gunicorn", marker = "sys_platform != 'win32'" },
     { name = "waitress" },
 ]
 windows = [
@@ -870,6 +879,7 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0" },
     { name = "google-api-python-client", marker = "extra == 'full'", specifier = ">=2.0" },
     { name = "google-generativeai", marker = "extra == 'full'", specifier = ">=0.5" },
+    { name = "gunicorn", marker = "sys_platform != 'win32' and extra == 'serve'", specifier = ">=22" },
     { name = "httpx", marker = "extra == 'full'", specifier = ">=0.27" },
     { name = "numpy", marker = "extra == 'full'", specifier = ">=1.26" },
     { name = "pillow", marker = "extra == 'computer'", specifier = ">=10.0" },
@@ -886,7 +896,7 @@ requires-dist = [
     { name = "waitress", marker = "extra == 'serve'", specifier = ">=3.0" },
     { name = "websockets", specifier = ">=14.0" },
 ]
-provides-extras = ["full", "serve", "computer", "windows"]
+provides-extras = ["computer", "full", "serve", "windows"]
 
 [package.metadata.requires-dev]
 dev = [

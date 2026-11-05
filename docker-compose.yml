@@ -1,0 +1,54 @@
+# 生产部署示例：WebUI + Bot 两个容器共享一个状态卷。
+#
+#   docker compose up -d --build
+#   首次启动后访问 http://127.0.0.1:5000 ，密码见：
+#   docker compose exec webui cat /app/state/webui.initial_password
+#
+# 注意：
+#   * 默认只映射到宿主机 127.0.0.1，公网访问请在前面放 HTTPS 反代。
+#   * 分容器部署时 WebUI 的「重启 Bot」按钮找不到另一个容器里的进程，
+#     请用 docker compose restart bot。
+#   * 开了反代再设置 LUNARX_TRUST_PROXY / LUNARX_COOKIE_SECURE /
+#     LUNARX_ALLOWED_HOSTS，且反代层数要与实际一致。
+services:
+  webui:
+    build: .
+    image: lunarx:local
+    command: ["gunicorn", "-c", "deploy/gunicorn.conf.py", "wsgi:application"]
+    environment:
+      LUNARX_WEB_BIND: "0.0.0.0:5000"
+      LUNARX_WEB_WORKERS: "2"
+      LUNARX_WEB_THREADS: "4"
+    ports:
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - lunarx_state:/app/state
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/healthz', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  bot:
+    image: lunarx:local
+    build: .
+    # 首次启动 WebUI 还没生成 config.json 时先等待，避免容器反复崩溃
+    command:
+      - sh
+      - -c
+      - "while [ ! -f /app/state/config.json ]; do echo '等待 WebUI 生成 config.json...'; sleep 2; done; exec python main.py"
+    volumes:
+      - lunarx_state:/app/state
+    depends_on:
+      webui:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  lunarx_state:

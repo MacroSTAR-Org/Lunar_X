@@ -37,6 +37,17 @@ class SecurityHeaderTests(unittest.TestCase):
         self.assertIn("no-store", resp.headers.get("Cache-Control", ""))
 
 
+class HealthcheckTests(unittest.TestCase):
+    def test_healthz_is_public(self):
+        """容器/反代探针不能要求登录会话。"""
+        app.config["TESTING"] = True
+        with app.test_client() as client:
+            resp = client.get("/healthz")
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.get_json()["status"], "ok")
+            self.assertTrue(resp.get_json().get("version"))
+
+
 class ContentSecurityPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

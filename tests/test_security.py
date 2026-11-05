@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from core.security import (
+    CrossProcessLock,
     SecurityError,
     atomic_write_json,
     is_safe_plugin_name,
@@ -156,6 +157,29 @@ class SanitizeTests(unittest.TestCase):
     def test_strips_control_chars(self):
         self.assertEqual(sanitize_log_text("a\nb\x1b[31mc", 20), "a?b?[31mc")
         self.assertEqual(sanitize_log_text("x" * 100, 10), "x" * 10)
+
+
+class CrossProcessLockTests(unittest.TestCase):
+    def test_second_lock_waits_until_release(self):
+        """多 worker 部署时，第二个安装任务必须被文件锁挡住。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "plugin-install.lock"
+            first = CrossProcessLock(path, timeout=0)
+            second = CrossProcessLock(path, timeout=0)
+
+            self.assertTrue(first.acquire(blocking=False))
+            self.assertFalse(second.acquire(blocking=False))
+
+            first.release()
+            self.assertTrue(second.acquire(blocking=False))
+            second.release()
+
+    def test_context_manager_releases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "init.lock"
+            with CrossProcessLock(path, timeout=1):
+                self.assertFalse(CrossProcessLock(path, timeout=0).acquire(blocking=False))
+            self.assertTrue(CrossProcessLock(path, timeout=0).acquire(blocking=False))
 
 
 if __name__ == "__main__":

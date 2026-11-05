@@ -13,6 +13,7 @@ import os
 import re
 import stat
 import tempfile
+import time
 import zipfile
 from contextlib import suppress
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -317,3 +318,68 @@ def atomic_write_json(
         json.dumps(data, indent=2, ensure_ascii=False),
         mode=mode,
     )
+
+
+# ---------------------------------------------------------------------------
+# 跨进程互斥
+# ---------------------------------------------------------------------------
+
+
+class CrossProcessLock:
+    """基于文件锁的跨进程互斥。
+
+    gunicorn / waitress 多 worker 时，threading.Lock 只在单进程内有效：
+    两个 worker 同时点安装插件会互相覆盖。这里用 flock（Unix）/
+    msvcrt.locking（Windows）把锁落到共享文件上，进程崩溃时由内核释放。
+    """
+
+    def __init__(self, path: str | os.PathLike[str], timeout: float = 30.0):
+        self.path = Path(path)
+        self.timeout = timeout
+        self._fd: int | None = None
+
+    @staticmethod
+    def _try_lock(fd: int) -> None:
+        if os.name == "nt":
+            import msvcrt
+
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        wait = self.timeout if timeout is None else timeout
+        deadline = time.monotonic() + max(0.0, wait)
+
+        while True:
+            fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                self._try_lock(fd)
+            except (BlockingIOError, OSError):
+                os.close(fd)
+                if not blocking or time.monotonic() >= deadline:
+                    return False
+                time.sleep(0.05)
+                continue
+            self._fd = fd
+            return True
+
+    def release(self) -> None:
+        if self._fd is not None:
+            with suppress(OSError):
+                os.close(self._fd)
+            self._fd = None
+
+    def __enter__(self) -> CrossProcessLock:
+        if not self.acquire(blocking=True):
+            raise TimeoutError(f"等待跨进程锁超时: {self.path}")
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.release()

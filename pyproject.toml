@@ -1,6 +1,6 @@
 [project]
 name = "lunar-x"
-version = "0.1.0"
+dynamic = ["version"]
 description = "MacroSTAR Lunar_X — 多平台聊天机器人框架"
 readme = "README.md"
 license = "GPL-3.0"
@@ -39,6 +39,8 @@ full = [
 # waitress 纯 Python、跨平台（含 Windows），gunicorn 只支持 Unix。
 serve = [
     "waitress>=3.0",
+    # Unix 生产部署用；Windows 走 waitress
+    "gunicorn>=22; sys_platform != 'win32'",
 ]
 # Computer Use 插件：鼠标键盘控制与截屏。
 # macOS 需在「系统设置 → 隐私与安全性」授予运行进程
@@ -62,6 +64,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["core"]
+
+[tool.hatch.version]
+path = "core/version.py"
 
 [dependency-groups]
 dev = [

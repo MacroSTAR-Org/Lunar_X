@@ -8,6 +8,7 @@
 import json
 import re
 import subprocess
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -100,6 +101,34 @@ class ExampleConfigTests(unittest.TestCase):
         self.assertEqual(
             dead_keys & set(data.keys()), set(), "示例配置里有无人读取的死键"
         )
+
+
+class VersionTests(unittest.TestCase):
+    """版本号只能有一个来源，避免 WebUI/Bot/README 各说各话。"""
+
+    def test_webui_and_core_version_match(self):
+        import webui
+        from core.version import __version__
+
+        self.assertEqual(webui.get_framework_version(), __version__)
+
+    def test_pyproject_uses_dynamic_version(self):
+        data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(data["project"].get("dynamic"), ["version"])
+        self.assertEqual(data["tool"]["hatch"]["version"]["path"], "core/version.py")
+
+    def test_readme_badge_matches(self):
+        from core.version import __version__
+
+        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn(f"版本-{__version__}-", readme)
+
+    def test_changelog_mentions_current_version(self):
+        """发版时 CHANGELOG 必须同步，避免文档与代码再次漂移。"""
+        from core.version import __version__
+
+        changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assertIn(f"## [{__version__}]", changelog)
 
 
 class ExampleAppsettingsTests(unittest.TestCase):

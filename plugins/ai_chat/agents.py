@@ -29,6 +29,30 @@ class AgentError(RuntimeError):
     """LLM 调用失败（配置缺失 / 网络 / 接口报错），信息可直接展示给用户。"""
 
 
+# LLM 调用成功率是排障最常用的指标：每 25 次调用打一行汇总，
+# 避免逐条刷屏，又能在日志里看到模型/网络是否在恶化。
+_llm_stats = {"calls": 0, "failures": 0}
+
+
+def llm_stats() -> dict[str, int]:
+    return {"calls": _llm_stats["calls"], "failures": _llm_stats["failures"]}
+
+
+def _record_llm_call(ok: bool) -> None:
+    _llm_stats["calls"] += 1
+    if not ok:
+        _llm_stats["failures"] += 1
+    if _llm_stats["calls"] % 25 == 0:
+        import logging
+
+        calls = _llm_stats["calls"]
+        failures = _llm_stats["failures"]
+        logging.getLogger("LunarPlugins").info(
+            f"LLM 调用统计: {calls} 次，失败 {failures} 次"
+            f"（失败率 {failures / calls * 100:.1f}%）"
+        )
+
+
 def resolve_model(cfg: dict[str, Any], role_key: str, default_model: str) -> str:
     """各角色独立模型配置，留空回退主模型。"""
     return str(cfg.get(role_key) or "").strip() or default_model
@@ -69,12 +93,17 @@ async def _post_chat(
                 raise AgentError("AI 请求过于频繁（429），请稍后再试")
             if resp.status != 200:
                 raise AgentError(f"AI 接口错误（HTTP {resp.status}）")
-            return await resp.json()
+            data = await resp.json()
+        _record_llm_call(True)
+        return data
     except TimeoutError as e:
+        _record_llm_call(False)
         raise AgentError("AI 响应超时，请稍后再试") from e
     except AgentError:
+        _record_llm_call(False)
         raise
     except Exception as e:
+        _record_llm_call(False)
         raise AgentError(f"AI 调用失败: {e}") from e
 
 

@@ -1,4 +1,5 @@
 import contextlib
+import functools
 import hashlib
 import hmac
 import ipaddress
@@ -37,6 +38,7 @@ from core import plugin_config as pc
 from core.security import (
     DEFAULT_DOWNLOAD_HOSTS,
     MAX_PLUGIN_ARCHIVE_BYTES,
+    CrossProcessLock,
     SecurityError,
     atomic_write_json,
     host_from_url,
@@ -48,6 +50,7 @@ from core.security import (
     sha256_file,
     validate_download_url,
 )
+from core.version import __version__
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -73,6 +76,32 @@ ADMIN_JSON_PATH = os.path.join(BASE_DIR, "admin114.json")
 WEBUI_JSON_PATH = os.path.join(BASE_DIR, "webui.json")
 INITIAL_PASSWORD_PATH = os.path.join(BASE_DIR, "webui.initial_password")
 LOG_FILE = os.path.join(BASE_DIR, "logs", "lunarx.log")
+
+# 跨进程互斥文件放在 data/.locks，Docker 部署时随状态卷持久化
+LOCKS_DIR = os.path.join(BASE_DIR, "data", ".locks")
+WEBUI_INIT_LOCK_PATH = os.path.join(LOCKS_DIR, "webui_init.lock")
+PLUGIN_INSTALL_LOCK_PATH = os.path.join(LOCKS_DIR, "plugin_install.lock")
+CONFIG_WRITE_LOCK_PATH = os.path.join(LOCKS_DIR, "config_write.lock")
+
+
+def _serialize_config_write(fn):
+    """把配置类接口的“读-改-写”串行化。
+
+    gunicorn 默认多 worker，两个请求同时改不同字段时，后写的会用旧快照
+    覆盖先写的更新。threading.Lock 跨不了进程，这里统一用文件锁。
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        lock = CrossProcessLock(CONFIG_WRITE_LOCK_PATH, timeout=10)
+        if not lock.acquire(blocking=True):
+            return jsonify({"error": "配置正在被其他请求修改，请稍后重试"}), 503
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            lock.release()
+
+    return wrapper
 
 # 只允许通过“设置”接口读写的 webui.json 字段。密码哈希、session_secret
 # 与 GitHub PAT 永远不经 GET 返回给浏览器。
@@ -197,6 +226,8 @@ SECURITY_KEYS = ("session_ttl_minutes", "allowed_ips", "login_fail_max", "login_
 _login_failures: dict[str, dict[str, float]] = {}
 
 CSRF_EXEMPT_PATHS = {"/login", "/api/login", "/api/auth_status", "/api/csrf"}
+# 不需要登录的路径：健康检查给负载均衡/容器探针用，不能要求会话
+PUBLIC_PATHS = CSRF_EXEMPT_PATHS | {"/healthz"}
 PASSWORD_CHANGE_ALLOWED = {
     "/api/auth_status",
     "/api/check_default_credentials",
@@ -357,7 +388,7 @@ def add_security_headers(response):
 @app.before_request
 def require_login():
     """登录、CSRF、会话有效期、IP 白名单与默认凭据强制改密的统一入口。"""
-    if request.path.startswith("/static/") or request.path in CSRF_EXEMPT_PATHS:
+    if request.path.startswith("/static/") or request.path in PUBLIC_PATHS:
         return None
 
     sec = _security_settings()
@@ -589,7 +620,9 @@ def init_default_configs():
         save_webui_config(webui_config)
 
 
-init_default_configs()
+# 多 worker 同时首次启动时，只允许一个进程生成凭据/默认配置
+with CrossProcessLock(WEBUI_INIT_LOCK_PATH):
+    init_default_configs()
 app.secret_key = get_session_secret()
 
 
@@ -764,6 +797,7 @@ def _normalize_allowed_ips(raw) -> list[str]:
 
 
 @app.route("/api/webui_security", methods=["POST"])
+@_serialize_config_write
 def set_webui_security():
     """更新安全设置，只接受白名单内的键，防止误覆盖凭据。"""
     data = request.get_json(silent=True)
@@ -809,6 +843,7 @@ def set_webui_security():
 
 
 @app.route("/api/webui_security/force_logout", methods=["POST"])
+@_serialize_config_write
 def force_logout_all():
     """强制所有会话下线：轮换 session_secret 并递增会话代际。"""
     new_secret = secrets.token_hex(32)
@@ -936,18 +971,8 @@ def _check_qq_online():
 
 
 def get_framework_version():
-    """从 core/bot.py 注释读取框架版本号"""
-    try:
-        bot_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "core", "bot.py")
-        with open(bot_py, encoding="utf-8") as f:
-            for line in f:
-                if "版本" in line:
-                    m = re.search(r"BETA\s+([\d.]+)", line)
-                    if m:
-                        return m.group(1)
-    except Exception:
-        pass
-    return "0.1.0.122"
+    """返回框架版本号；唯一来源是 core/version.py。"""
+    return __version__
 
 
 def _find_bot_processes():
@@ -965,6 +990,12 @@ def _find_bot_processes():
 @app.route("/api/version", methods=["GET"])
 def get_version():
     return jsonify({"version": get_framework_version()})
+
+
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    """容器/反代存活探针：不依赖登录会话，也不暴露配置细节。"""
+    return jsonify({"status": "ok", "version": __version__})
 
 
 @app.route("/api/restart_bot", methods=["POST"])
@@ -1215,6 +1246,7 @@ def tail_logs():
 
 
 @app.route("/api/change_password", methods=["POST"])
+@_serialize_config_write
 def change_password():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
@@ -1565,6 +1597,7 @@ def get_config(config_type):
 
 
 @app.route("/api/config/<config_type>", methods=["POST"])
+@_serialize_config_write
 def update_config(config_type):
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
@@ -1623,6 +1656,7 @@ def get_webui_settings():
 
 
 @app.route("/api/webui/settings", methods=["POST"])
+@_serialize_config_write
 def update_webui_settings():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
@@ -1735,6 +1769,7 @@ def get_plugin_config(plugin_name):
 
 
 @app.route("/api/plugins/<plugin_name>/config", methods=["POST"])
+@_serialize_config_write
 def update_plugin_config(plugin_name):
     """保存插件配置。
 
@@ -2185,7 +2220,14 @@ def install_plugin():
     repo_prefix = repo_prefix or "Unisphere"
 
     def generate_install_logs():
-        if not _PLUGIN_INSTALL_LOCK.acquire(blocking=False):
+        # threading.Lock 只管本进程；多 worker 部署必须再加文件锁
+        thread_locked = _PLUGIN_INSTALL_LOCK.acquire(blocking=False)
+        process_lock = CrossProcessLock(PLUGIN_INSTALL_LOCK_PATH, timeout=0)
+        process_locked = thread_locked and process_lock.acquire(blocking=False)
+        if not (thread_locked and process_locked):
+            if thread_locked:
+                _PLUGIN_INSTALL_LOCK.release()
+            process_lock.release()
             yield "data: Error: 已有插件安装任务正在运行，请稍后再试\n\n"
             yield "data: INSTALL_FAILED\n\n"
             return
@@ -2268,6 +2310,7 @@ def install_plugin():
         finally:
             if temp_dir:
                 shutil.rmtree(temp_dir, ignore_errors=True)
+            process_lock.release()
             _PLUGIN_INSTALL_LOCK.release()
 
     return Response(stream_with_context(generate_install_logs()), mimetype="text/event-stream")

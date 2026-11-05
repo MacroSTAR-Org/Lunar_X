@@ -4,6 +4,7 @@ import importlib.util
 import inspect
 import os
 import re
+import shutil
 import sys
 import threading
 import time
@@ -188,6 +189,7 @@ class PluginManager:
                     sys.path.insert(0, plugin_dir)
                     path_inserted = True
 
+                self._purge_plugin_bytecode(path, plugin_dir)
                 spec = importlib.util.spec_from_file_location(name, path)
                 if spec is None:
                     error_msg = f"无法为 {name} 创建模块规范"
@@ -280,6 +282,31 @@ class PluginManager:
         )
 
     @staticmethod
+    def _purge_plugin_bytecode(path: str, plugin_dir: str | None) -> None:
+        """删掉插件自己的 .pyc 缓存。
+
+        Python 判断 .pyc 是否过期用的是「源文件 mtime（秒）+ 大小」。
+        同一秒内修改插件且文件大小不变时（改个数字/字符串），会继续加载旧
+        字节码，表现为“热重载没生效”。这里在每次加载前清掉缓存，强制重编译。
+        """
+        if plugin_dir:
+            for root, dirs, _files in os.walk(plugin_dir):
+                for name in list(dirs):
+                    if name == "__pycache__":
+                        shutil.rmtree(os.path.join(root, name), ignore_errors=True)
+                        dirs.remove(name)
+            return
+
+        cache_dir = os.path.join(os.path.dirname(path), "__pycache__")
+        if not os.path.isdir(cache_dir):
+            return
+        stem = os.path.splitext(os.path.basename(path))[0] + "."
+        for name in os.listdir(cache_dir):
+            if name.startswith(stem) and name.endswith(".pyc"):
+                with contextlib.suppress(OSError):
+                    os.remove(os.path.join(cache_dir, name))
+
+    @staticmethod
     def _collect_owned_submodules(
         modules_before: set, plugin_dir: str | None, plugin_name: str
     ) -> list[str]:
@@ -324,6 +351,28 @@ class PluginManager:
     async def unload_plugins(self) -> None:
         await self._unload_modules(self.plugins)
 
+    def _plugin_timeout(self) -> float | None:
+        """单个插件 handler 的最长执行时间；<=0 表示关闭超时保护。"""
+        try:
+            timeout = float(self.config.get("plugin_timeout", 30))
+        except (TypeError, ValueError):
+            timeout = 30.0
+        return timeout if timeout > 0 else None
+
+    async def _invoke_handler(self, name: str, method: str, coro: Any) -> Any:
+        timeout = self._plugin_timeout()
+        if timeout is None:
+            return await coro
+        try:
+            return await asyncio.wait_for(coro, timeout=timeout)
+        except TimeoutError:
+            # 卡死的插件只影响自己所在的会话；取消后继续让后续插件处理
+            logger.error(
+                f"插件 {name}.{method} 处理事件超时（>{timeout:g}s），已取消",
+                logger_name="LunarPlugins",
+            )
+            return False
+
     async def handle_event(self, event: Event, lunar) -> bool:
 
         lunar.plugin_logger.debug("=== 开始处理事件 ===")
@@ -347,7 +396,11 @@ class PluginManager:
                         lunar.plugin_logger.debug(
                             f"准备执行插件 {name} 的 on_lunar_event 方法 for {event.__class__.__name__}"
                         )
-                        result = await module.on_lunar_event(event, lunar)
+                        result = await self._invoke_handler(
+                            name,
+                            "on_lunar_event",
+                            module.on_lunar_event(event, lunar),
+                        )
                         lunar.plugin_logger.debug(
                             f"插件 {name} (on_lunar_event) 执行结果: {result}"
                         )
@@ -385,7 +438,11 @@ class PluginManager:
                     lunar.plugin_logger.debug(
                         f"准备执行插件 {name} 的 on_message 方法 for {event.__class__.__name__}"
                     )
-                    result = await module.on_message(event, lunar)
+                    result = await self._invoke_handler(
+                        name,
+                        "on_message",
+                        module.on_message(event, lunar),
+                    )
                     lunar.plugin_logger.debug(f"插件 {name} (on_message) 执行结果: {result}")
 
                     if result:

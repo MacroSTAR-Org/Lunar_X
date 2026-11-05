@@ -8,6 +8,9 @@
   "bot_name_en": "Lunar",
   "root_user": 0,
   "trigger_keyword": "$",
+  "event_queue_size": 1024,
+  "conversation_queue_size": 64,
+  "plugin_timeout": 30,
   "auto_reload_plugins": true,
   "log_level": "INFO",
   "log_save_levels": ["DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"]

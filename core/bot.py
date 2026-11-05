@@ -43,8 +43,10 @@ class LunarBot:
         "auto_reload_plugins",
         "bot_name",
         "bot_name_en",
+        "conversation_queue_size",
         "log_level",
         "log_save_levels",
+        "plugin_timeout",
         "root_user",
         "trigger_keyword",
     )
@@ -55,6 +57,7 @@ class LunarBot:
         logger.configure_from_config(config)
         self.protocol_name = config.get("protocol", "onebot_v11")
         self.connection: BaseTransport
+        queue_maxsize = config.get("event_queue_size", 1024)
         if self.protocol_name == "milky":
             from .milky_adapter import MilkyAdapter
             from .transport import MilkyTransport
@@ -63,14 +66,22 @@ class LunarBot:
             # Milky 与 OneBot 是两套凭据，不能互相回退：
             # 回退会把 OneBot token 发给 Milky 协议端，既连不上也泄露凭据。
             milky_token = config.get("milky_token") or None
-            self.connection = MilkyTransport(milky_server, milky_token, max_retries=5)
+            self.connection = MilkyTransport(
+                milky_server,
+                milky_token,
+                max_retries=5,
+                queue_maxsize=queue_maxsize,
+            )
             self.protocol = MilkyAdapter(self)
             logger.info(f"协议模式: Milky (协议端: {milky_server})")
         else:
             from .onebot_adapter import OneBotAdapter
 
             self.connection = WebSocketConnection(
-                config["ws_server"], config.get("token"), max_retries=5
+                config["ws_server"],
+                config.get("token"),
+                max_retries=5,
+                queue_maxsize=queue_maxsize,
             )
             self.protocol = OneBotAdapter(self)
             logger.info("协议模式: OneBot v11")
@@ -93,6 +104,19 @@ class LunarBot:
         # 运行时配置热更新：WebUI 保存的 root_user / 管理员名单 / 触发词等
         self._runtime_mtimes: dict[str, float] = {}
         self._last_runtime_check = 0.0
+        # 事件派发：同一会话串行、不同会话并发。慢插件只拖住自己所在的群/私聊，
+        # 不会让管理命令和别的群一起排队；每个会话有积压上限，洪峰下不无限堆任务。
+        self._dispatch_tails: dict[str, asyncio.Task] = {}
+        self._dispatch_pending: dict[str, int] = {}
+        self._dispatch_stats: dict[str, Any] = {
+            "received": 0,
+            "dropped": 0,
+            "inflight": 0,
+            "max_inflight": 0,
+            "latency_ms": 0.0,
+            "latency_ema_ms": 0.0,
+        }
+        self._last_stats_log = time.monotonic()
         self._register_native_commands()
 
     # ------------------------------------------------------------------
@@ -282,11 +306,87 @@ class LunarBot:
             logger.error(f"调用自定义API {action} 时发生错误: {e}, 参数: {params}")
             return {"status": "error", "msg": str(e)}
 
-    async def _handle_event(self, event_data: dict[str, Any]):
+    def _parse_event(self, event_data: dict[str, Any]) -> Event:
         if self.protocol_name == "milky":
-            event = self.protocol.parse_event(event_data)
+            return self.protocol.parse_event(event_data)
+        return EventFactory.create_event(event_data, self.msg)
+
+    @staticmethod
+    def _conversation_key(event: Event) -> str:
+        group_id = getattr(event, "group_id", None)
+        if group_id:
+            return f"group:{group_id}"
+        user_id = getattr(event, "user_id", None)
+        if user_id:
+            return f"private:{user_id}"
+        return "global"
+
+    def _conversation_limit(self) -> int:
+        try:
+            value = int(self.config.get("conversation_queue_size", 64))
+        except (TypeError, ValueError):
+            value = 64
+        return max(1, value)
+
+    def _on_dispatch_done(self, key: str, task: asyncio.Task) -> None:
+        remaining = self._dispatch_pending.get(key, 1) - 1
+        if remaining > 0:
+            self._dispatch_pending[key] = remaining
         else:
-            event = EventFactory.create_event(event_data, self.msg)
+            self._dispatch_pending.pop(key, None)
+        if self._dispatch_tails.get(key) is task:
+            self._dispatch_tails.pop(key, None)
+        stats = self._dispatch_stats
+        stats["inflight"] = max(0, int(stats["inflight"]) - 1)
+
+    def _schedule_event(self, event: Event) -> None:
+        """把事件挂到所属会话的串行链上，立即返回，不阻塞传输层读取。"""
+        key = self._conversation_key(event)
+        limit = self._conversation_limit()
+        pending = self._dispatch_pending.get(key, 0)
+        stats = self._dispatch_stats
+        stats["received"] = int(stats["received"]) + 1
+        if pending >= limit:
+            # 会话已经积压这么多，再排队只会让延迟无限增长；丢新事件并告警。
+            stats["dropped"] = int(stats["dropped"]) + 1
+            dropped = int(stats["dropped"])
+            if dropped == 1 or dropped % 100 == 0:
+                logger.warning(
+                    f"会话 {key} 事件积压已达上限 {limit}，"
+                    f"累计丢弃 {dropped} 条事件"
+                )
+            return
+
+        self._dispatch_pending[key] = pending + 1
+        stats["inflight"] = int(stats["inflight"]) + 1
+        stats["max_inflight"] = max(int(stats["max_inflight"]), int(stats["inflight"]))
+        previous = self._dispatch_tails.get(key)
+        task = asyncio.create_task(
+            self._run_dispatch_chain(previous, event, time.monotonic())
+        )
+        self._dispatch_tails[key] = task
+        task.add_done_callback(lambda t, k=key: self._on_dispatch_done(k, t))
+
+    async def _run_dispatch_chain(
+        self, previous: asyncio.Task | None, event: Event, queued_at: float
+    ) -> None:
+        if previous is not None:
+            with contextlib.suppress(Exception):
+                await previous
+        try:
+            await self._dispatch_event(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"处理事件时发生未捕获错误: {e}")
+        finally:
+            latency = (time.monotonic() - queued_at) * 1000
+            stats = self._dispatch_stats
+            stats["latency_ms"] = latency
+            ema = float(stats["latency_ema_ms"])
+            stats["latency_ema_ms"] = latency if ema == 0 else ema * 0.8 + latency * 0.2
+
+    async def _dispatch_event(self, event: Event) -> None:
         if isinstance(event, MessageEvent):
             await self._handle_message_event(event)
         elif isinstance(event, NoticeEvent):
@@ -298,6 +398,10 @@ class LunarBot:
         else:
             event.log_event()
             await self._handle_plugin_event(event)
+
+    async def _handle_event(self, event_data: dict[str, Any]):
+        """兼容入口：解析后同步处理一个事件（调度器内部使用链式任务）。"""
+        await self._dispatch_event(self._parse_event(event_data))
 
     async def _handle_message_event(self, event: MessageEvent):
         event.log_event()
@@ -615,6 +719,39 @@ class LunarBot:
                 with contextlib.suppress(OSError):
                     os.remove(restart_info_file)
 
+    async def _drain_event_tasks(self, timeout: float = 10.0) -> None:
+        """停机前给已接收事件一个收尾窗口，超时则取消，避免消息处理到一半被斩断。"""
+        tails = [task for task in self._dispatch_tails.values() if not task.done()]
+        if not tails:
+            return
+        logger.info(f"等待 {len(tails)} 个会话的事件处理完成（最多 {timeout:g}s）...")
+        _, pending = await asyncio.wait(tails, timeout=timeout)
+        for task in pending:
+            task.cancel()
+        if pending:
+            logger.warning(f"{len(pending)} 个事件处理任务超时未完成，已取消")
+
+    def _maybe_log_dispatch_stats(self) -> None:
+        now = time.monotonic()
+        if now - self._last_stats_log < 60:
+            return
+        self._last_stats_log = now
+        queue = self.connection.queue_stats()
+        stats = self._dispatch_stats
+        logger.info(
+            "运行统计: 队列 {size}/{maxsize}，丢弃 {queue_dropped}，"
+            "会话积压 {conversations}，派发中 {inflight}（峰值 {max_inflight}），"
+            "平均派发延迟 {latency:.0f}ms".format(
+                size=queue["size"],
+                maxsize=queue["maxsize"],
+                queue_dropped=queue["dropped"],
+                conversations=len(self._dispatch_pending),
+                inflight=int(stats["inflight"]),
+                max_inflight=int(stats["max_inflight"]),
+                latency=float(stats["latency_ema_ms"]),
+            )
+        )
+
     async def _listen_events(self):
         logger.info("开始监听事件...")
 
@@ -623,12 +760,29 @@ class LunarBot:
                 logger.debug(
                     f"收到原始事件: {json.dumps(event_data, ensure_ascii=False, indent=2)}"
                 )
-                await self._handle_event(event_data)
+                try:
+                    event = self._parse_event(event_data)
+                except Exception as e:
+                    logger.error(f"解析事件失败，已跳过: {e}")
+                    continue
+                self._schedule_event(event)
+                self._maybe_log_dispatch_stats()
         except Exception as e:
             logger.error(f"监听事件时发生错误: {e}")
         finally:
+            cancelled = False
+            try:
+                await self._drain_event_tasks()
+            except asyncio.CancelledError:
+                cancelled = True
+                for task in self._dispatch_tails.values():
+                    task.cancel()
+                self._dispatch_tails.clear()
             logger.info("事件监听已停止")
-            await self._handle_plugin_event(Events.LunarStopListen())
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._handle_plugin_event(Events.LunarStopListen())
+            if cancelled:
+                raise asyncio.CancelledError
 
     def _format_message_for_log(
         self, message_segments: Sequence[dict[str, Any] | BaseSegment]
@@ -1126,5 +1280,5 @@ class LunarBot:
 
 # MacroSTAR-Studio 2025
 # 项目名称: Lunar X
-# 版本: BETA 0.1.0.128
+# 版本: BETA（唯一来源见 core/version.py）
 # 全新一代QQ机器人框架

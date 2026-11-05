@@ -55,6 +55,7 @@ Lunar_X/
 │   ├── plugin_manager.py # 插件加载/热重载/监控
 │   ├── plugin_config.py  # 插件私有配置 schema
 │   ├── diy.py         # 动态 API 调用器
+│   ├── version.py     # 版本号唯一来源（打包与 WebUI 共用）
 │   └── logger.py      # 彩色日志系统
 ├── plugins/           # 插件目录（d_ 前缀 = 已禁用）
 ├── static/ templates/ # WebUI 前端资源
@@ -83,6 +84,23 @@ python webui.py
 # 4. 启动 Bot
 python main.py
 ```
+
+版本号只在 `core/version.py` 维护；`pyproject.toml` 用 Hatch 动态读取它，WebUI 也直接
+读取同一个值，发版时只需改这一处。变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+### 兼容性矩阵
+
+| 项目 | 支持范围 | 说明 |
+|---|---|---|
+| Python | 3.13+ | `pyproject.toml` 的 `requires-python` 为准 |
+| OneBot v11 | 正向 WebSocket | LLOneBot / Lagrange 等协议端，`protocol: "onebot"` |
+| Milky | HTTP API + WebSocket 事件 | LLBot 默认 `3010` 端口，`protocol: "milky"` |
+| WebUI | Flask + gunicorn（Linux）/ waitress（含 Windows） | 默认只监听 `127.0.0.1` |
+| 容器 | Docker / Docker Compose | WebUI 与 Bot 分容器，共享状态卷 |
+| 数据库 | 无 | 插件数据使用 SQLite 文件或 JSON |
+
+运行中的 Bot 每 60 秒输出一行运行统计（队列深度、丢弃数、会话积压、派发延迟）；
+AI 管线每 25 次 LLM 调用输出调用数与失败率，便于在日志里定位积压或上游故障。
 
 ## 配置与密钥
 
@@ -134,6 +152,27 @@ waitress-serve --listen=127.0.0.1:5000 wsgi:application
 | `deploy/lunarx-webui.service` | systemd 单元（WebUI，含安全加固） |
 | `deploy/lunarx-bot.service` | systemd 单元（Bot） |
 | `deploy/lunarx.env.example` | 环境变量模板 |
+| `deploy/docker-entrypoint.sh` | 容器入口（可变状态收进挂载卷） |
+| `Dockerfile` / `docker-compose.yml` | 容器化部署（WebUI + Bot 共享状态卷） |
+
+WebUI 暴露 `GET /healthz`（无需登录），返回 `{"status": "ok", "version": "..."}`，可直接
+用于容器 healthcheck、K8s readiness/liveness 或反代健康探测。
+
+### Docker Compose 部署
+
+```bash
+docker compose up -d --build
+docker compose exec webui cat /app/state/webui.initial_password   # 首次登录密码
+docker compose logs -f bot
+```
+
+- WebUI 与 Bot 分两个容器，共享 `lunarx_state` 卷；配置、日志、数据、已装插件都在卷里，
+  重建容器不会丢。
+- WebUI 默认只映射到宿主机 `127.0.0.1:5000`，公网访问请在前面放 HTTPS 反代。
+- **分容器时 WebUI 的「重启 Bot」按钮不可用**（它找不到另一个容器里的进程），
+  请用 `docker compose restart bot`。
+- 镜像内以非 root 用户运行；`config.json`、`admin114.json`、`webui.json` 等凭据文件
+  已列入 `.dockerignore`，不会打进镜像。
 
 放在反代后面时，这三个环境变量必须设置：
 
